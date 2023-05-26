@@ -193,7 +193,7 @@ class Trainer:
     def run_epoch(self):
         """Run a single epoch of training and validation
         """
-        self.model_lr_scheduler.step()
+        # self.model_lr_scheduler.step()
 
         print("Training")
         self.set_train()
@@ -224,6 +224,8 @@ class Trainer:
                 self.val()
 
             self.step += 1
+        
+        self.model_lr_scheduler.step()
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
@@ -322,10 +324,10 @@ class Trainer:
         """
         self.set_eval()
         try:
-            inputs = self.val_iter.next()
+            inputs = next(self.val_iter)
         except StopIteration:
             self.val_iter = iter(self.val_loader)
-            inputs = self.val_iter.next()
+            inputs = next(self.val_iter)
 
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
@@ -384,7 +386,8 @@ class Trainer:
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],
-                    padding_mode="border")
+                    padding_mode="border",
+                    align_corners=True)
 
                 if not self.opt.disable_automasking:
                     outputs[("color_identity", frame_id, scale)] = \
