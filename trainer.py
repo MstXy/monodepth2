@@ -49,7 +49,10 @@ class Trainer:
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
         if self.opt.use_stereo:
-            self.opt.frame_ids.append("s")
+            self.opt.frame_ids.append("s_0")
+        
+        if self.opt.full_stereo:
+            self.opt.frame_ids += ["s_" + str(i) for i in self.opt.frame_ids]
 
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
@@ -86,6 +89,11 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
+        
+        if self.opt.optical_flow:
+            # TODO
+
+            pass
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -236,7 +244,7 @@ class Trainer:
         if self.opt.pose_model_type == "shared":
             # If we are using a shared encoder for both depth and pose (as advocated
             # in monodepthv1), then all images are fed separately through the depth encoder.
-            all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])
+            all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids]) # all images: ([i-1, i, i+1] * [L, R])
             all_features = self.models["encoder"](all_color_aug)
             all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
 
@@ -244,7 +252,7 @@ class Trainer:
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
 
-            outputs = self.models["depth"](features[0])
+            outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features = self.models["encoder"](inputs["color_aug", 0, 0])
@@ -276,7 +284,7 @@ class Trainer:
                 pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
 
             for f_i in self.opt.frame_ids[1:]:
-                if f_i != "s":
+                if not isinstance(f_i, str): # not s_0, s_-1, s_1
                     # To maintain ordering we always pass frames in temporal order
                     if f_i < 0:
                         pose_inputs = [pose_feats[f_i], pose_feats[0]]
@@ -300,18 +308,18 @@ class Trainer:
             # Here we input all frames to the pose net (and predict all poses) together
             if self.opt.pose_model_type in ["separate_resnet", "posecnn"]:
                 pose_inputs = torch.cat(
-                    [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
+                    [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if not isinstance(i, str)], 1)
 
                 if self.opt.pose_model_type == "separate_resnet":
                     pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
             elif self.opt.pose_model_type == "shared":
-                pose_inputs = [features[i] for i in self.opt.frame_ids if i != "s"]
+                pose_inputs = [features[i] for i in self.opt.frame_ids if not isinstance(i, str)]
 
             axisangle, translation = self.models["pose"](pose_inputs)
 
             for i, f_i in enumerate(self.opt.frame_ids[1:]):
-                if f_i != "s":
+                if not isinstance(i, str):
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
@@ -359,7 +367,7 @@ class Trainer:
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
-                if frame_id == "s":
+                if frame_id[0] == "s": # s_0, s_-1, s_1, ...
                     T = inputs["stereo_T"]
                 else:
                     T = outputs[("cam_T_cam", 0, frame_id)]
@@ -600,6 +608,7 @@ class Trainer:
                 to_save['height'] = self.opt.height
                 to_save['width'] = self.opt.width
                 to_save['use_stereo'] = self.opt.use_stereo
+                to_save['full_stereo'] = self.opt.full_stereo
             torch.save(to_save, save_path)
 
         save_path = os.path.join(save_folder, "{}.pth".format("adam"))

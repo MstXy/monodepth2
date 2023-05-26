@@ -79,6 +79,18 @@ class MonodepthOptions:
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
+        # full stereo ------------------------
+        self.parser.add_argument("--full_stereo",
+                                 help="if set, uses stereo pair for all adjacent frames (if any) in training",
+                                 action="store_true")
+        # ------------------------
+        # optical flow branch ----------------
+        self.parser.add_argument("--optical_flow",
+                                 help="if set, uses optical flow branch",
+                                 default=True,
+                                 action="store_true")
+        # ------------------------
+
         self.parser.add_argument("--frame_ids",
                                  nargs="+",
                                  type=int,
@@ -132,7 +144,8 @@ class MonodepthOptions:
         self.parser.add_argument("--pose_model_type",
                                  type=str,
                                  help="normal or shared",
-                                 default="separate_resnet",
+                                 # default="separate_resnet",
+                                 default="shared",
                                  choices=["posecnn", "separate_resnet", "shared"])
 
         # SYSTEM options

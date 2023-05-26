@@ -154,9 +154,9 @@ class MonoDataset(data.Dataset):
             side = None
 
         for i in self.frame_idxs:
-            if i == "s":
+            if i[0] == "s":
                 other_side = {"r": "l", "l": "r"}[side]
-                inputs[("color", i, -1)] = self.get_color(folder, frame_index, other_side, do_flip)
+                inputs[("color", i, -1)] = self.get_color(folder, frame_index + int(i.split("_")[1]), other_side, do_flip)
             else:
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
 
@@ -189,7 +189,8 @@ class MonoDataset(data.Dataset):
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)
             inputs["depth_gt"] = torch.from_numpy(inputs["depth_gt"].astype(np.float32))
 
-        if "s" in self.frame_idxs:
+
+        if "s_0" in self.frame_idxs: # s_0 is the base case of using stereo image
             stereo_T = np.eye(4, dtype=np.float32)
             baseline_sign = -1 if do_flip else 1
             side_sign = -1 if side == "l" else 1
