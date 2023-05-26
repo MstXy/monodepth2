@@ -86,9 +86,9 @@ class MonodepthOptions:
         # ------------------------
         # optical flow branch ----------------
         self.parser.add_argument("--optical_flow",
-                                 help="if set, uses optical flow branch",
-                                 default=True,
-                                 action="store_true")
+                                 type=str,
+                                 help="optical flow model",
+                                 default="pwc")
         # ------------------------
 
         self.parser.add_argument("--frame_ids",

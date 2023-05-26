@@ -90,9 +90,9 @@ class Trainer:
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
         
-        if self.opt.optical_flow:
+        if self.opt.optical_flow in ["pwc",]:
             # TODO
-
+            
             pass
 
         if self.opt.predictive_mask:
@@ -246,7 +246,7 @@ class Trainer:
             # in monodepthv1), then all images are fed separately through the depth encoder.
             all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids]) # all images: ([i-1, i, i+1] * [L, R])
             all_features = self.models["encoder"](all_color_aug)
-            all_features = [torch.split(f, self.opt.batch_size) for f in all_features]
+            all_features = [torch.split(f, self.opt.batch_size) for f in all_features] # separate by frame
 
             features = {}
             for i, k in enumerate(self.opt.frame_ids):
