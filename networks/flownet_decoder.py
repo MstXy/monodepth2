@@ -252,7 +252,8 @@ class FlowNetSDecoder(BaseDecoder):
         self.flow_div = flow_div
 
         if flow_loss is not None:
-            self.flow_loss = build_loss(flow_loss)
+            # self.flow_loss = build_loss(flow_loss)
+            self.flow_loss = None
 
         layers = []
         for level in self.flow_levels:
