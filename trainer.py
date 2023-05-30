@@ -90,10 +90,57 @@ class Trainer:
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
         
-        if self.opt.optical_flow in ["pwc",]:
-            # TODO
+        if self.opt.optical_flow in ["flownet",]:
+            # TODO: dimesions change
+            self.models["corr"] = networks.CorrEncoder(
+                in_channels=473,
+                pyramid_levels=['level3', 'level4', 'level5', 'level6'],
+                kernel_size=(3, 3, 3, 3),
+                num_convs=(1, 2, 2, 2),
+                out_channels=(256, 512, 512, 1024),
+                redir_in_channels=256,
+                redir_channels=32,
+                strides=(1, 2, 2, 2),
+                dilations=(1, 1, 1, 1),
+                corr_cfg=dict(
+                    type='Correlation',
+                    kernel_size=1,
+                    max_displacement=10,
+                    stride=1,
+                    padding=0,
+                    dilation_patch=2),
+                scaled=False,
+                conv_cfg=None,
+                norm_cfg=None,
+                act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
+            )
+
+            self.models["corr"].to(self.device)
+            self.parameters_to_train += list(self.models["corr"].parameters())
             
-            pass
+            self.models["flow"] = networks.FlowNetCDecoder(in_channels=dict(
+                    level6=1024, level5=1026, level4=770, level3=386, level2=194),
+                out_channels=dict(level6=512, level5=256, level4=128, level3=64),
+                deconv_bias=True,
+                pred_bias=True,
+                upsample_bias=True,
+                norm_cfg=None,
+                act_cfg=dict(type='LeakyReLU', negative_slope=0.1),
+                init_cfg=[
+                    dict(
+                        type='Kaiming',
+                        layer=['Conv2d', 'ConvTranspose2d'],
+                        a=0.1,
+                        mode='fan_in',
+                        nonlinearity='leaky_relu',
+                        bias=0),
+                    dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
+                ])
+            
+            self.models["flow"].to(self.device)
+            self.parameters_to_train += list(self.models["flow"].parameters())
+
+            
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -127,7 +174,10 @@ class Trainer:
 
         train_filenames = readlines(fpath.format("train"))
         val_filenames = readlines(fpath.format("val"))
-        img_ext = '.png' if self.opt.png else '.jpg'
+
+        # TODO: for debugging
+        # img_ext = '.png' if self.opt.png else '.jpg'
+        img_ext = '.png'
 
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
@@ -264,6 +314,9 @@ class Trainer:
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs, features))
 
+        if self.opt.optical_flow in ["flownet",]:
+            outputs.update(self.predict_flow(features))
+
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
 
@@ -326,6 +379,33 @@ class Trainer:
                         axisangle[:, i], translation[:, i])
 
         return outputs
+    
+
+    def predict_flow(self, features):
+        """Predict flow between ??.
+        """
+        
+        # TODO: multi image
+
+        outputs = {}
+
+        # print(type(features[-1])) # Python list
+        # print(len(features[-1])) # 5
+        
+        # use D=256, i.e., level=3
+        corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
+        corr_curr_next = self.models["corr"](features[0][3], features[1][3])
+
+        mod_prev = {"level"+str(i) : features[-1][i] for i in range(1, len(features[-1]))}
+        mod_curr = {"level"+str(i) : features[0][i] for i in range(1, len(features[0]))}
+
+        flow_prev_curr = self.models["flow"](mod_prev, corr_prev_curr)
+        flow_curr_next = self.models["flow"](mod_curr, corr_curr_next)
+        
+        outputs["flow"] = [flow_prev_curr, flow_curr_next]
+
+        return outputs
+
 
     def val(self):
         """Validate the model on a single minibatch
@@ -367,7 +447,7 @@ class Trainer:
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
-                if frame_id[0] == "s": # s_0, s_-1, s_1, ...
+                if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
                     T = inputs["stereo_T"]
                 else:
                     T = outputs[("cam_T_cam", 0, frame_id)]

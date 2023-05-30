@@ -54,11 +54,11 @@ class MonodepthOptions:
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
-                                 default=192)
+                                 default=192) # 192
         self.parser.add_argument("--width",
                                  type=int,
                                  help="input image width",
-                                 default=640)
+                                 default=640) # 640
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -88,7 +88,7 @@ class MonodepthOptions:
         self.parser.add_argument("--optical_flow",
                                  type=str,
                                  help="optical flow model",
-                                 default="pwc")
+                                 default="flownet")
         # ------------------------
 
         self.parser.add_argument("--frame_ids",

@@ -14,7 +14,9 @@ import torch.nn as nn
 from torch.autograd import Variable
 import os
 os.environ['PYTHON_EGG_CACHE'] = 'tmp/' # a writable directory 
-from correlation_package.modules.corr import Correlation 
+# from correlation_package.modules.corr import Correlation 
+
+from .correlation import correlation 
 
 import numpy as np
 
@@ -32,7 +34,7 @@ def deconv(in_planes, out_planes, kernel_size=4, stride=2, padding=1):
 
 
 
-class PWCDCNet(nn.Module):
+class PWCDecoder(nn.Module):
     """
     PWC-DC net. add dilation convolution and densenet connections
 
@@ -42,28 +44,28 @@ class PWCDCNet(nn.Module):
         input: md --- maximum displacement (for correlation. default: 4), after warpping
 
         """
-        super(PWCDCNet,self).__init__()
+        super(PWCDecoder,self).__init__()
 
-        self.conv1a  = conv(3,   16, kernel_size=3, stride=2)
-        self.conv1aa = conv(16,  16, kernel_size=3, stride=1)
-        self.conv1b  = conv(16,  16, kernel_size=3, stride=1)
-        self.conv2a  = conv(16,  32, kernel_size=3, stride=2)
-        self.conv2aa = conv(32,  32, kernel_size=3, stride=1)
-        self.conv2b  = conv(32,  32, kernel_size=3, stride=1)
-        self.conv3a  = conv(32,  64, kernel_size=3, stride=2)
-        self.conv3aa = conv(64,  64, kernel_size=3, stride=1)
-        self.conv3b  = conv(64,  64, kernel_size=3, stride=1)
-        self.conv4a  = conv(64,  96, kernel_size=3, stride=2)
-        self.conv4aa = conv(96,  96, kernel_size=3, stride=1)
-        self.conv4b  = conv(96,  96, kernel_size=3, stride=1)
-        self.conv5a  = conv(96, 128, kernel_size=3, stride=2)
-        self.conv5aa = conv(128,128, kernel_size=3, stride=1)
-        self.conv5b  = conv(128,128, kernel_size=3, stride=1)
-        self.conv6aa = conv(128,196, kernel_size=3, stride=2)
-        self.conv6a  = conv(196,196, kernel_size=3, stride=1)
-        self.conv6b  = conv(196,196, kernel_size=3, stride=1)
+        # self.conv1a  = conv(3,   16, kernel_size=3, stride=2)
+        # self.conv1aa = conv(16,  16, kernel_size=3, stride=1)
+        # self.conv1b  = conv(16,  16, kernel_size=3, stride=1)
+        # self.conv2a  = conv(16,  32, kernel_size=3, stride=2)
+        # self.conv2aa = conv(32,  32, kernel_size=3, stride=1)
+        # self.conv2b  = conv(32,  32, kernel_size=3, stride=1)
+        # self.conv3a  = conv(32,  64, kernel_size=3, stride=2)
+        # self.conv3aa = conv(64,  64, kernel_size=3, stride=1)
+        # self.conv3b  = conv(64,  64, kernel_size=3, stride=1)
+        # self.conv4a  = conv(64,  96, kernel_size=3, stride=2)
+        # self.conv4aa = conv(96,  96, kernel_size=3, stride=1)
+        # self.conv4b  = conv(96,  96, kernel_size=3, stride=1)
+        # self.conv5a  = conv(96, 128, kernel_size=3, stride=2)
+        # self.conv5aa = conv(128,128, kernel_size=3, stride=1)
+        # self.conv5b  = conv(128,128, kernel_size=3, stride=1)
+        # self.conv6aa = conv(128,196, kernel_size=3, stride=2)
+        # self.conv6a  = conv(196,196, kernel_size=3, stride=1)
+        # self.conv6b  = conv(196,196, kernel_size=3, stride=1)
 
-        self.corr    = Correlation(pad_size=md, kernel_size=1, max_displacement=md, stride1=1, stride2=1, corr_multiply=1)
+        # self.corr    = Correlation(pad_size=md, kernel_size=1, max_displacement=md, stride1=1, stride2=1, corr_multiply=1)
         self.leakyRELU = nn.LeakyReLU(0.1)
         
         nd = (2*md+1)**2
@@ -190,7 +192,7 @@ class PWCDCNet(nn.Module):
         c26 = self.conv6b(self.conv6a(self.conv6aa(c25)))
 
 
-        corr6 = self.corr(c16, c26) 
+        corr6 = correlation.FunctionCorrelation(c16, c26) 
         corr6 = self.leakyRELU(corr6)   
 
 
@@ -205,7 +207,7 @@ class PWCDCNet(nn.Module):
 
         
         warp5 = self.warp(c25, up_flow6*0.625)
-        corr5 = self.corr(c15, warp5) 
+        corr5 = correlation.FunctionCorrelation(c15, warp5) 
         corr5 = self.leakyRELU(corr5)
         x = torch.cat((corr5, c15, up_flow6, up_feat6), 1)
         x = torch.cat((self.conv5_0(x), x),1)
@@ -219,7 +221,7 @@ class PWCDCNet(nn.Module):
 
        
         warp4 = self.warp(c24, up_flow5*1.25)
-        corr4 = self.corr(c14, warp4)  
+        corr4 = correlation.FunctionCorrelation(c14, warp4)  
         corr4 = self.leakyRELU(corr4)
         x = torch.cat((corr4, c14, up_flow5, up_feat5), 1)
         x = torch.cat((self.conv4_0(x), x),1)
@@ -233,7 +235,7 @@ class PWCDCNet(nn.Module):
 
 
         warp3 = self.warp(c23, up_flow4*2.5)
-        corr3 = self.corr(c13, warp3) 
+        corr3 = correlation.FunctionCorrelation(c13, warp3) 
         corr3 = self.leakyRELU(corr3)
         
 
@@ -249,7 +251,7 @@ class PWCDCNet(nn.Module):
 
 
         warp2 = self.warp(c22, up_flow3*5.0) 
-        corr2 = self.corr(c12, warp2)
+        corr2 = correlation.FunctionCorrelation(c12, warp2)
         corr2 = self.leakyRELU(corr2)
         x = torch.cat((corr2, c12, up_flow3, up_feat3), 1)
         x = torch.cat((self.conv2_0(x), x),1)

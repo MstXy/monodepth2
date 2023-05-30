@@ -1,9 +1,10 @@
 """
-Work of https://github.com/sniklaus/pytorch-unflow/blob/master/correlation/correlation.py
+Work of https://github.com/sniklaus/pytorch-liteflownet/blob/master/correlation/correlation.py
 
 """
 
 import cupy
+import math
 import re
 import torch
 
@@ -26,9 +27,9 @@ kernel_Correlation_rearrange = '''
 
       __syncthreads();
 
-      int intPaddedY = (intIndex / SIZE_3(input)) + 20;
-      int intPaddedX = (intIndex % SIZE_3(input)) + 20;
-      int intRearrange = ((SIZE_3(input) + 40) * intPaddedY) + intPaddedX;
+      int intPaddedY = (intIndex / SIZE_3(input)) + 3*{{intStride}};
+      int intPaddedX = (intIndex % SIZE_3(input)) + 3*{{intStride}};
+      int intRearrange = ((SIZE_3(input) + 6*{{intStride}}) * intPaddedY) + intPaddedX;
 
       output[(((intSample * SIZE_1(output) * SIZE_2(output)) + intRearrange) * SIZE_1(input)) + intChannel] = fltValue;
     }
@@ -46,8 +47,8 @@ kernel_Correlation_updateOutput = '''
       float *patch_data = (float *)patch_data_char;
       
       // First (upper left) position of kernel upper-left corner in current center position of neighborhood in image 1
-      int x1 = blockIdx.x + 20;
-      int y1 = blockIdx.y + 20;
+      int x1 = (blockIdx.x + 3) * {{intStride}};
+      int y1 = (blockIdx.y + 3) * {{intStride}};
       int item = blockIdx.z;
       int ch_off = threadIdx.x;
       
@@ -71,8 +72,8 @@ kernel_Correlation_updateOutput = '''
       for (int top_channel = 0; top_channel < SIZE_1(top); top_channel++) {
         sum[ch_off] = 0;
       
-        int s2o = (top_channel % 21 - 10) * 2;
-        int s2p = (top_channel / 21 - 10) * 2;
+        int s2o = (top_channel % 7 - 3) * {{intStride}};
+        int s2p = (top_channel / 7 - 3) * {{intStride}};
         
         for (int j = 0; j < 1; j++) { // HEIGHT
           for (int i = 0; i < 1; i++) { // WIDTH
@@ -117,21 +118,21 @@ kernel_Correlation_updateGradOne = '''
       float* gradTwo
     ) { for (int intIndex = (blockIdx.x * blockDim.x) + threadIdx.x; intIndex < n; intIndex += blockDim.x * gridDim.x) {
       int n = intIndex % SIZE_1(gradOne); // channels
-      int l = (intIndex / SIZE_1(gradOne)) % SIZE_3(gradOne) + 20; // w-pos
-      int m = (intIndex / SIZE_1(gradOne) / SIZE_3(gradOne)) % SIZE_2(gradOne) + 20; // h-pos
+      int l = (intIndex / SIZE_1(gradOne)) % SIZE_3(gradOne) + 3*{{intStride}}; // w-pos
+      int m = (intIndex / SIZE_1(gradOne) / SIZE_3(gradOne)) % SIZE_2(gradOne) + 3*{{intStride}}; // h-pos
       
       // round_off is a trick to enable integer division with ceil, even for negative numbers
       // We use a large offset, for the inner part not to become negative.
       const int round_off = ROUND_OFF;
-      const int round_off_s1 = round_off;
+      const int round_off_s1 = {{intStride}} * round_off;
       
       // We add round_off before_s1 the int division and subtract round_off after it, to ensure the formula matches ceil behavior:
-      int xmin = (l - 20 + round_off_s1 - 1) + 1 - round_off; // ceil (l - 20)
-      int ymin = (m - 20 + round_off_s1 - 1) + 1 - round_off; // ceil (l - 20)
+      int xmin = (l - 3*{{intStride}} + round_off_s1 - 1) / {{intStride}} + 1 - round_off; // ceil (l - 3*{{intStride}}) / {{intStride}}
+      int ymin = (m - 3*{{intStride}} + round_off_s1 - 1) / {{intStride}} + 1 - round_off; // ceil (l - 3*{{intStride}}) / {{intStride}}
       
       // Same here:
-      int xmax = (l - 20 + round_off_s1) - round_off; // floor (l - 20)
-      int ymax = (m - 20 + round_off_s1) - round_off; // floor (m - 20)
+      int xmax = (l - 3*{{intStride}} + round_off_s1) / {{intStride}} - round_off; // floor (l - 3*{{intStride}}) / {{intStride}}
+      int ymax = (m - 3*{{intStride}} + round_off_s1) / {{intStride}} - round_off; // floor (m - 3*{{intStride}}) / {{intStride}}
       
       float sum = 0;
       if (xmax>=0 && ymax>=0 && (xmin<=SIZE_3(gradOutput)-1) && (ymin<=SIZE_2(gradOutput)-1)) {
@@ -141,16 +142,16 @@ kernel_Correlation_updateGradOne = '''
         ymin = max(0,ymin);
         ymax = min(SIZE_2(gradOutput)-1,ymax);
         
-        for (int p = -10; p <= 10; p++) {
-          for (int o = -10; o <= 10; o++) {
+        for (int p = -3; p <= 3; p++) {
+          for (int o = -3; o <= 3; o++) {
             // Get rbot1 data:
-            int s2o = 2 * o;
-            int s2p = 2 * p;
+            int s2o = {{intStride}} * o;
+            int s2p = {{intStride}} * p;
             int idxbot1 = ((intSample * SIZE_1(rbot0) + (m+s2p)) * SIZE_2(rbot0) + (l+s2o)) * SIZE_3(rbot0) + n;
             float bot1tmp = rbot1[idxbot1]; // rbot1[l+s2o,m+s2p,n]
             
             // Index offset for gradOutput in following loops:
-            int op = (p+10) * 21 + (o+10); // index[o,p]
+            int op = (p+3) * 7 + (o+3); // index[o,p]
             int idxopoffset = (intSample * SIZE_1(gradOutput) + op);
             
             for (int y = ymin; y <= ymax; y++) {
@@ -163,7 +164,7 @@ kernel_Correlation_updateGradOne = '''
         }
       }
       const int sumelems = SIZE_1(gradOne);
-      const int bot0index = ((n * SIZE_2(gradOne)) + (m-20)) * SIZE_3(gradOne) + (l-20);
+      const int bot0index = ((n * SIZE_2(gradOne)) + (m-3*{{intStride}})) * SIZE_3(gradOne) + (l-3*{{intStride}});
       gradOne[bot0index + intSample*SIZE_1(gradOne)*SIZE_2(gradOne)*SIZE_3(gradOne)] = sum / (float)sumelems;
     } }
 '''
@@ -181,28 +182,28 @@ kernel_Correlation_updateGradTwo = '''
       float* gradTwo
     ) { for (int intIndex = (blockIdx.x * blockDim.x) + threadIdx.x; intIndex < n; intIndex += blockDim.x * gridDim.x) {
       int n = intIndex % SIZE_1(gradTwo); // channels
-      int l = (intIndex / SIZE_1(gradTwo)) % SIZE_3(gradTwo) + 20; // w-pos
-      int m = (intIndex / SIZE_1(gradTwo) / SIZE_3(gradTwo)) % SIZE_2(gradTwo) + 20; // h-pos
+      int l = (intIndex / SIZE_1(gradTwo)) % SIZE_3(gradTwo) + 3*{{intStride}}; // w-pos
+      int m = (intIndex / SIZE_1(gradTwo) / SIZE_3(gradTwo)) % SIZE_2(gradTwo) + 3*{{intStride}}; // h-pos
       
       // round_off is a trick to enable integer division with ceil, even for negative numbers
       // We use a large offset, for the inner part not to become negative.
       const int round_off = ROUND_OFF;
-      const int round_off_s1 = 1 * round_off;
+      const int round_off_s1 = {{intStride}} * round_off;
       
       float sum = 0;
-      for (int p = -10; p <= 10; p++) {
-        for (int o = -10; o <= 10; o++) {
-          int s2o = 2 * o;
-          int s2p = 2 * p;
+      for (int p = -3; p <= 3; p++) {
+        for (int o = -3; o <= 3; o++) {
+          int s2o = {{intStride}} * o;
+          int s2p = {{intStride}} * p;
           
           //Get X,Y ranges and clamp
           // We add round_off before_s1 the int division and subtract round_off after it, to ensure the formula matches ceil behavior:
-          int xmin = (l - 20 - s2o + round_off_s1 - 1) + 1 - round_off; // ceil (l - 20 - s2o)
-          int ymin = (m - 20 - s2p + round_off_s1 - 1) + 1 - round_off; // ceil (l - 20 - s2o)
+          int xmin = (l - 3*{{intStride}} - s2o + round_off_s1 - 1) / {{intStride}} + 1 - round_off; // ceil (l - 3*{{intStride}} - s2o) / {{intStride}}
+          int ymin = (m - 3*{{intStride}} - s2p + round_off_s1 - 1) / {{intStride}} + 1 - round_off; // ceil (l - 3*{{intStride}} - s2o) / {{intStride}}
           
           // Same here:
-          int xmax = (l - 20 - s2o + round_off_s1) - round_off; // floor (l - 20 - s2o)
-          int ymax = (m - 20 - s2p + round_off_s1) - round_off; // floor (m - 20 - s2p)
+          int xmax = (l - 3*{{intStride}} - s2o + round_off_s1) / {{intStride}} - round_off; // floor (l - 3*{{intStride}} - s2o) / {{intStride}}
+          int ymax = (m - 3*{{intStride}} - s2p + round_off_s1) / {{intStride}} - round_off; // floor (m - 3*{{intStride}} - s2p) / {{intStride}}
           
           if (xmax>=0 && ymax>=0 && (xmin<=SIZE_3(gradOutput)-1) && (ymin<=SIZE_2(gradOutput)-1)) {
             xmin = max(0,xmin);
@@ -216,7 +217,7 @@ kernel_Correlation_updateGradTwo = '''
             float bot0tmp = rbot0[idxbot0]; // rbot1[l+s2o,m+s2p,n]
             
             // Index offset for gradOutput in following loops:
-            int op = (p+10) * 21 + (o+10); // index[o,p]
+            int op = (p+3) * 7 + (o+3); // index[o,p]
             int idxopoffset = (intSample * SIZE_1(gradOutput) + op);
             
             for (int y = ymin; y <= ymax; y++) {
@@ -229,13 +230,13 @@ kernel_Correlation_updateGradTwo = '''
         }
       }
       const int sumelems = SIZE_1(gradTwo);
-      const int bot1index = ((n * SIZE_2(gradTwo)) + (m-20)) * SIZE_3(gradTwo) + (l-20);
+      const int bot1index = ((n * SIZE_2(gradTwo)) + (m-3*{{intStride}})) * SIZE_3(gradTwo) + (l-3*{{intStride}});
       gradTwo[bot1index + intSample*SIZE_1(gradTwo)*SIZE_2(gradTwo)*SIZE_3(gradTwo)] = sum / (float)sumelems;
     } }
 '''
 
 def cupy_kernel(strFunction, objVariables):
-    strKernel = globals()[strFunction]
+    strKernel = globals()[strFunction].replace('{{intStride}}', str(objVariables['intStride']))
 
     while True:
         objMatch = re.search('(SIZE_)([0-4])(\()([^\)]*)(\))', strKernel)
@@ -279,18 +280,21 @@ def cupy_launch(strFunction, strKernel):
 
 class _FunctionCorrelation(torch.autograd.Function):
     @staticmethod
-    def forward(self, one, two):
-        rbot0 = one.new_zeros([ one.shape[0], one.shape[2] + 40, one.shape[3] + 40, one.shape[1] ])
-        rbot1 = one.new_zeros([ one.shape[0], one.shape[2] + 40, one.shape[3] + 40, one.shape[1] ])
+    def forward(self, one, two, intStride):
+        rbot0 = one.new_zeros([ one.shape[0], one.shape[2] + (6 * intStride), one.shape[3] + (6 * intStride), one.shape[1] ])
+        rbot1 = one.new_zeros([ one.shape[0], one.shape[2] + (6 * intStride), one.shape[3] + (6 * intStride), one.shape[1] ])
+
+        self.intStride = intStride
 
         one = one.contiguous(); assert(one.is_cuda == True)
         two = two.contiguous(); assert(two.is_cuda == True)
 
-        output = one.new_zeros([ one.shape[0], 441, one.shape[2], one.shape[3] ])
+        output = one.new_zeros([ one.shape[0], 49, int(math.ceil(one.shape[2] / intStride)), int(math.ceil(one.shape[3] / intStride)) ])
 
         if one.is_cuda == True:
             n = one.shape[2] * one.shape[3]
             cupy_launch('kernel_Correlation_rearrange', cupy_kernel('kernel_Correlation_rearrange', {
+                'intStride': self.intStride,
                 'input': one,
                 'output': rbot0
             }))(
@@ -301,6 +305,7 @@ class _FunctionCorrelation(torch.autograd.Function):
 
             n = two.shape[2] * two.shape[3]
             cupy_launch('kernel_Correlation_rearrange', cupy_kernel('kernel_Correlation_rearrange', {
+                'intStride': self.intStride,
                 'input': two,
                 'output': rbot1
             }))(
@@ -311,6 +316,7 @@ class _FunctionCorrelation(torch.autograd.Function):
 
             n = output.shape[1] * output.shape[2] * output.shape[3]
             cupy_launch('kernel_Correlation_updateOutput', cupy_kernel('kernel_Correlation_updateOutput', {
+                'intStride': self.intStride,
                 'rbot0': rbot0,
                 'rbot1': rbot1,
                 'top': output
@@ -345,6 +351,7 @@ class _FunctionCorrelation(torch.autograd.Function):
                 for intSample in range(one.shape[0]):
                     n = one.shape[1] * one.shape[2] * one.shape[3]
                     cupy_launch('kernel_Correlation_updateGradOne', cupy_kernel('kernel_Correlation_updateGradOne', {
+                        'intStride': self.intStride,
                         'rbot0': rbot0,
                         'rbot1': rbot1,
                         'gradOutput': gradOutput,
@@ -362,6 +369,7 @@ class _FunctionCorrelation(torch.autograd.Function):
                 for intSample in range(one.shape[0]):
                     n = one.shape[1] * one.shape[2] * one.shape[3]
                     cupy_launch('kernel_Correlation_updateGradTwo', cupy_kernel('kernel_Correlation_updateGradTwo', {
+                        'intStride': self.intStride,
                         'rbot0': rbot0,
                         'rbot1': rbot1,
                         'gradOutput': gradOutput,
@@ -380,12 +388,12 @@ class _FunctionCorrelation(torch.autograd.Function):
 
         # end
 
-        return gradOne, gradTwo
+        return gradOne, gradTwo, None
     # end
 # end
 
-def FunctionCorrelation(tenOne, tenTwo):
-    return _FunctionCorrelation.apply(tenOne, tenTwo)
+def FunctionCorrelation(tenOne, tenTwo, intStride):
+    return _FunctionCorrelation.apply(tenOne, tenTwo, intStride)
 # end
 
 class ModuleCorrelation(torch.nn.Module):
@@ -393,7 +401,7 @@ class ModuleCorrelation(torch.nn.Module):
         super().__init__()
     # end
 
-    def forward(self, tenOne, tenTwo):
-        return _FunctionCorrelation.apply(tenOne, tenTwo)
+    def forward(self, tenOne, tenTwo, intStride):
+        return _FunctionCorrelation.apply(tenOne, tenTwo, intStride)
     # end
 # end

@@ -154,7 +154,7 @@ class MonoDataset(data.Dataset):
             side = None
 
         for i in self.frame_idxs:
-            if i[0] == "s":
+            if isinstance(i, str):
                 other_side = {"r": "l", "l": "r"}[side]
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + int(i.split("_")[1]), other_side, do_flip)
             else:

@@ -1,6 +1,6 @@
 import os
 import torch
-from torch.utils.ffi import create_extension
+from torch.utils.cpp_extension import BuildExtension
 
 
 sources = ['correlation_package/src/corr.c']
@@ -28,7 +28,7 @@ extra_objects = ['correlation_package/src/corr_cuda_kernel.cu.o']
 extra_objects += ['correlation_package/src/corr1d_cuda_kernel.cu.o']
 extra_objects = [os.path.join(this_file, fname) for fname in extra_objects]
 
-ffi = create_extension(
+ffi = BuildExtension(
     'correlation_package._ext.corr',
     package=True,
     headers=headers,
