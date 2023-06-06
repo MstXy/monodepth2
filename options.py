@@ -8,6 +8,7 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import argparse
+from datetime import datetime
 
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
 
@@ -20,15 +21,19 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                              #    default=os.path.join(file_dir, "kitti_data")
-                                 default="/home/zcy/data/win_id4_share/KITTI/raw/data/raw_dataset"
+                                 # default=os.path.join(file_dir, "kitti_data")
+                                 default="/home/liu/data16t/datasets/raw/data/raw_dataset"
+                                 #default = "/home/wangshuo/Datasets/Self-driving/DIFINT_calibr/win_id4_share/KITTI/raw/data/raw_dataset"
                                  )
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp"))
+                                 default=os.path.join(os.path.expanduser("~"), "tmp", "monodepth_tb_log", datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
 
         # TRAINING options
+        self.parser.add_argument("--debug",
+                                 type=bool,
+                                 default=True)
         self.parser.add_argument("--model_name",
                                  type=str,
                                  help="the name of the folder to save the model in",
@@ -89,6 +94,11 @@ class MonodepthOptions:
                                  type=str,
                                  help="optical flow model",
                                  default="flownet")
+        
+        self.parser.add_argument("--depth_branch",
+                        type=bool,
+                        help="predict depth or not",
+                        default=False)
         # ------------------------
 
         self.parser.add_argument("--frame_ids",
@@ -101,11 +111,11 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=12)
+                                 default=16)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
-                                 default=1e-4)
+                                 default=5e-3)
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
@@ -134,6 +144,7 @@ class MonodepthOptions:
         self.parser.add_argument("--weights_init",
                                  type=str,
                                  help="pretrained or scratch",
+                                 # default="pretrained",
                                  default="pretrained",
                                  choices=["pretrained", "scratch"])
         self.parser.add_argument("--pose_model_input",
@@ -155,7 +166,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_workers",
                                  type=int,
                                  help="number of dataloader workers",
-                                 default=12)
+                                 default=24)
 
         # LOADING options
         self.parser.add_argument("--load_weights_folder",

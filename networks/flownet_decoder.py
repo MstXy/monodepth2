@@ -252,7 +252,9 @@ class FlowNetSDecoder(BaseDecoder):
         self.flow_div = flow_div
 
         if flow_loss is not None:
-            # self.flow_loss = build_loss(flow_loss)
+            
+            ## TODO: build flow loss
+            self.flow_loss = build_loss(flow_loss)
             self.flow_loss = None
 
         layers = []
@@ -404,6 +406,18 @@ class FlowNetCDecoder(FlowNetSDecoder):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.conv1 = nn.Conv2d(
+            2,
+            64,
+            kernel_size=3,
+            stride=1,
+            padding=1)
+        self.conv2 = nn.Conv2d(
+            64,
+            2,
+            kernel_size=3,
+            stride=1,
+            padding=1)
 
     def forward(self, feat1: Dict[str, torch.Tensor],
                 corr_feat: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -436,6 +450,18 @@ class FlowNetCDecoder(FlowNetSDecoder):
 
             flow_pred[level] = flow
 
+        #upsample flow to original size
+        for level in self.flow_levels:
+            if level != self.start_level:
+                scale_factor = 196//flow_pred[level].shape[2]
+                flow_pred[level+"_upsampled"] = F.interpolate(
+                    flow_pred[level],
+                    scale_factor=scale_factor,
+                    mode='bilinear',
+                    align_corners=False) * 2.0
+                flow_pred[level+"_upsampled"] = self.conv2(self.conv1(flow_pred[level+"_upsampled"]))
+                
+        
         return flow_pred
     
 

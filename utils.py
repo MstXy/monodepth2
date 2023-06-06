@@ -9,6 +9,7 @@ import os
 import hashlib
 import zipfile
 from six.moves import urllib
+import torch
 
 
 def readlines(filename):
@@ -112,3 +113,15 @@ def download_model_if_doesnt_exist(model_name):
             f.extractall(model_path)
 
         print("   Model unzipped to {}".format(model_path))
+
+
+def image_grads(image_batch, stride=1):
+    # image_batch: [batch_size, 3, width, height]
+    # image_batch_grad: [batch_size, 3, width-1, height-1]
+    # image_batch_grad: [batch_size, 3, width, height]
+    image_batch_grad = torch.zeros_like(image_batch)
+    image_batch_grad[:, :, stride:, :] = image_batch[:, :, stride:, :] - image_batch[:, :, :-stride, :]
+    image_batch_grad[:, :, :, stride:] = image_batch[:, :, :, stride:] - image_batch[:, :, :, :-stride]
+    return image_batch_grad
+
+

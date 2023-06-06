@@ -59,10 +59,12 @@ class Trainer:
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
-        self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales)
-        self.models["depth"].to(self.device)
-        self.parameters_to_train += list(self.models["depth"].parameters())
+
+        if self.opt.depth_branch:
+            self.models["depth"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["depth"].to(self.device)
+            self.parameters_to_train += list(self.models["depth"].parameters())
 
         if self.use_pose_net:
             if self.opt.pose_model_type == "separate_resnet":
@@ -140,7 +142,9 @@ class Trainer:
             self.models["flow"].to(self.device)
             self.parameters_to_train += list(self.models["flow"].parameters())
 
-            
+        if self.opt.debug:
+            # for debug, output shape explicitly
+            self.outputs_shape = {}
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -275,7 +279,7 @@ class Trainer:
             if early_phase or late_phase:
                 self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
-                if "depth_gt" in inputs:
+                if "depth_gt" in inputs and self.opt.depth_branch:
                     self.compute_depth_losses(inputs, outputs, losses)
 
                 self.log("train", inputs, outputs, losses)
@@ -288,6 +292,7 @@ class Trainer:
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
         """
+        outputs = {}
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
@@ -299,14 +304,17 @@ class Trainer:
             all_features = [torch.split(f, self.opt.batch_size) for f in all_features] # separate by frame
 
             features = {}
+            
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
 
-            outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
+            if self.opt.depth_branch:
+                outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+            if self.opt.depth_branch:
+                outputs = self.models["depth"](features)
 
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
@@ -316,10 +324,24 @@ class Trainer:
 
         if self.opt.optical_flow in ["flownet",]:
             outputs.update(self.predict_flow(features))
-
+ 
         self.generate_images_pred(inputs, outputs)
+        
+        if self.opt.debug:
+            # for debug, output shape explicitly
+            for k, v in outputs.items():
+                if k=='flow':
+                    # TODO: automatic type discrimination
+                    for l1 in range(len(v)):
+                        tmp = {}
+                        for k_l2,v_l2 in v[l1].items():
+                            tmp[k_l2] = v_l2.shape
+                            
+                        self.outputs_shape[k+"_"+str(l1)] = tmp
+                else:
+                    self.outputs_shape[k] = v.shape
+        
         losses = self.compute_losses(inputs, outputs)
-
         return outputs, losses
 
     def predict_poses(self, inputs, features):
@@ -380,7 +402,6 @@ class Trainer:
 
         return outputs
     
-
     def predict_flow(self, features):
         """Predict flow between ??.
         """
@@ -395,6 +416,21 @@ class Trainer:
         # use D=256, i.e., level=3
         corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
         corr_curr_next = self.models["corr"](features[0][3], features[1][3])
+        
+        
+        
+        if self.opt.debug:
+            # for debug; feature_dim explicitly
+            feature_shape_list = []
+            for i in range(len(features[0])):
+                feature_shape_list.append(
+                    features[0][i].shape
+                )
+            # for debug; corr shape
+            corr_shape = {}
+            for level in corr_prev_curr:
+                corr_shape[str(level)] = corr_prev_curr[level].shape
+
 
         mod_prev = {"level"+str(i) : features[-1][i] for i in range(1, len(features[-1]))}
         mod_curr = {"level"+str(i) : features[0][i] for i in range(1, len(features[0]))}
@@ -405,7 +441,6 @@ class Trainer:
         outputs["flow"] = [flow_prev_curr, flow_curr_next]
 
         return outputs
-
 
     def val(self):
         """Validate the model on a single minibatch
@@ -420,7 +455,7 @@ class Trainer:
         with torch.no_grad():
             outputs, losses = self.process_batch(inputs)
 
-            if "depth_gt" in inputs:
+            if "depth_gt" in inputs and self.opt.depth_branch:
                 self.compute_depth_losses(inputs, outputs, losses)
 
             self.log("val", inputs, outputs, losses)
@@ -432,54 +467,106 @@ class Trainer:
         """Generate the warped (reprojected) color images for a minibatch.
         Generated images are saved into the `outputs` dictionary.
         """
-        for scale in self.opt.scales:
-            disp = outputs[("disp", scale)]
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                disp = F.interpolate(
-                    disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
-                source_scale = 0
+        if self.opt.optical_flow is not None:
+            # compute warped images by flow
+            for level_upsampled in outputs["flow"][0].keys():
+                if not "upsampled" in level_upsampled or 'level5' in level_upsampled:
+                    continue
+                if not "level2_upsampled" in level_upsampled:
+                    continue
+                flow_prev_curr = outputs["flow"][0][level_upsampled]
+                flow_curr_next = outputs["flow"][1][level_upsampled]
+                
+                
+                
+                # warp I_prev(inputs[('color', -1, 0)]) to curr_img_warped
+                # warp I_curr(inputs[('color', 0, 0)]) to next_img_warped
 
-            _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
+                ## psudo:
+                ## I_curr[:, i+flow_prev_curr[i,j][0], j+flow_prev_curr[i,j][1]] = I_prev[:, i, j]
+                ## I_curr[:, i, j] = I_prev[:, i-flow_prev_curr[i,j][0], j-flow_prev_curr[i,j][1]]
+                curr_img_warped = np.zeros((self.opt.batch_size, 3, self.opt.width, self.opt.height))
+                next_img_warped = np.zeros((self.opt.batch_size, 3, self.opt.width, self.opt.height))
+                meshgrid = np.meshgrid(range(self.opt.width), range(self.opt.height), indexing='xy')
+                id_cordinates = torch.Tensor(np.stack(meshgrid, axis=0).astype(np.float32)).to(self.device)
+                end_point_corr_prev_curr = id_cordinates - flow_prev_curr
+                end_point_corr_curr_next = id_cordinates - flow_curr_next
+                
+                
+                curr_img_warped = F.grid_sample(inputs[('color', -1, 0)],
+                                                end_point_corr_prev_curr.permute(0, 2, 3, 1),
+                                                padding_mode="border",
+                                                align_corners=True)
+                
+                next_img_warped = F.grid_sample(inputs[('color', 0, 0)],
+                                                end_point_corr_curr_next.permute(0, 2, 3, 1),
+                                                padding_mode="border",
+                                                align_corners=True)
+                
+                # for x_cor in range(self.opt.width):
+                #     for y_cor in range(self.opt.height):
+                #         curr_img_warped[:, x_cor, y_cor] = inputs[('color', -1, 0)] \
+                #         [:, int(x_cor-flow_prev_curr[:, 0, x_cor, y_cor]), y_cor-int(flow_prev_curr[:, 1, x_cor, y_cor])]
+                        
+                #         next_img_warped[:, x_cor, y_cor] = inputs[('color', 0, 0)] \
+                #         [:, int(x_cor-flow_curr_next[:, 0, x_cor, y_cor]), int(y_cor-flow_curr_next[:, 1, x_cor, y_cor])]
+                
+                outputs[("warped_flow", 0, level_upsampled)] = curr_img_warped  #warped previous to current by flow
+                outputs[("warped_flow", 1, level_upsampled)] = next_img_warped  #warped previous to current by flow
+                
+            
+            
+        if self.opt.depth_branch:
 
-            outputs[("depth", 0, scale)] = depth
-
-            for i, frame_id in enumerate(self.opt.frame_ids[1:]):
-
-                if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
-                    T = inputs["stereo_T"]
+            # compute warped images by depth
+            for scale in self.opt.scales:
+                disp = outputs[("disp", scale)]
+                if self.opt.v1_multiscale:
+                    source_scale = scale
                 else:
-                    T = outputs[("cam_T_cam", 0, frame_id)]
+                    disp = F.interpolate(
+                        disp, [self.opt.height, self.opt.width], mode="bilinear", align_corners=False)
+                    source_scale = 0
 
-                # from the authors of https://arxiv.org/abs/1712.00175
-                if self.opt.pose_model_type == "posecnn":
+                _, depth = disp_to_depth(disp, self.opt.min_depth, self.opt.max_depth)
 
-                    axisangle = outputs[("axisangle", 0, frame_id)]
-                    translation = outputs[("translation", 0, frame_id)]
+                outputs[("depth", 0, scale)] = depth
 
-                    inv_depth = 1 / depth
-                    mean_inv_depth = inv_depth.mean(3, True).mean(2, True)
+                for i, frame_id in enumerate(self.opt.frame_ids[1:]):
 
-                    T = transformation_from_parameters(
-                        axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
+                    if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
+                        T = inputs["stereo_T"]
+                    else:
+                        T = outputs[("cam_T_cam", 0, frame_id)]
 
-                cam_points = self.backproject_depth[source_scale](
-                    depth, inputs[("inv_K", source_scale)])
-                pix_coords = self.project_3d[source_scale](
-                    cam_points, inputs[("K", source_scale)], T)
+                    # from the authors of https://arxiv.org/abs/1712.00175
+                    if self.opt.pose_model_type == "posecnn":
 
-                outputs[("sample", frame_id, scale)] = pix_coords
+                        axisangle = outputs[("axisangle", 0, frame_id)]
+                        translation = outputs[("translation", 0, frame_id)]
 
-                outputs[("color", frame_id, scale)] = F.grid_sample(
-                    inputs[("color", frame_id, source_scale)],
-                    outputs[("sample", frame_id, scale)],
-                    padding_mode="border",
-                    align_corners=True)
+                        inv_depth = 1 / depth
+                        mean_inv_depth = inv_depth.mean(3, True).mean(2, True)
 
-                if not self.opt.disable_automasking:
-                    outputs[("color_identity", frame_id, scale)] = \
-                        inputs[("color", frame_id, source_scale)]
+                        T = transformation_from_parameters(
+                            axisangle[:, 0], translation[:, 0] * mean_inv_depth[:, 0], frame_id < 0)
+
+                    cam_points = self.backproject_depth[source_scale](
+                        depth, inputs[("inv_K", source_scale)])
+                    pix_coords = self.project_3d[source_scale](
+                        cam_points, inputs[("K", source_scale)], T)
+
+                    outputs[("sample", frame_id, scale)] = pix_coords
+
+                    outputs[("color", frame_id, scale)] = F.grid_sample(
+                        inputs[("color", frame_id, source_scale)],
+                        outputs[("sample", frame_id, scale)],
+                        padding_mode="border",
+                        align_corners=True)
+
+                    if not self.opt.disable_automasking:
+                        outputs[("color_identity", frame_id, scale)] = \
+                            inputs[("color", frame_id, source_scale)]
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -500,87 +587,107 @@ class Trainer:
         """
         losses = {}
         total_loss = 0
+        flow_loss = 0
 
-        for scale in self.opt.scales:
-            loss = 0
-            reprojection_losses = []
+        if self.opt.optical_flow is not None:
+            ## compute flow losses
+            for k, pred in outputs.items():
+                if 'warped_flow' in k and 0 in k:
+                    target = inputs[("color", 0, 0)]
+                elif 'warped_flow' in k and 1 in k:
+                    target = inputs[("color", 1, 0)]
+                else:
+                    continue
+                
+                l2_loss= torch.mean((pred - target)**2)
+                ssim_loss = torch.mean(self.ssim(pred, target))
+                flow_loss += 0.85 * ssim_loss + 0.15 * l2_loss
 
-            if self.opt.v1_multiscale:
-                source_scale = scale
-            else:
-                source_scale = 0
+            losses["flow_loss"] = flow_loss
+            total_loss += flow_loss
+        
+        
+        if self.opt.depth_branch:
+            for scale in self.opt.scales:
+                loss = 0
+                reprojection_losses = []
 
-            disp = outputs[("disp", scale)]
-            color = inputs[("color", 0, scale)]
-            target = inputs[("color", 0, source_scale)]
+                if self.opt.v1_multiscale:
+                    source_scale = scale
+                else:
+                    source_scale = 0
 
-            for frame_id in self.opt.frame_ids[1:]:
-                pred = outputs[("color", frame_id, scale)]
-                reprojection_losses.append(self.compute_reprojection_loss(pred, target))
+                disp = outputs[("disp", scale)]
+                color = inputs[("color", 0, scale)]
+                target = inputs[("color", 0, source_scale)]
 
-            reprojection_losses = torch.cat(reprojection_losses, 1)
-
-            if not self.opt.disable_automasking:
-                identity_reprojection_losses = []
                 for frame_id in self.opt.frame_ids[1:]:
-                    pred = inputs[("color", frame_id, source_scale)]
-                    identity_reprojection_losses.append(
-                        self.compute_reprojection_loss(pred, target))
+                    pred = outputs[("color", frame_id, scale)]
+                    reprojection_losses.append(self.compute_reprojection_loss(pred, target))
 
-                identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
+                reprojection_losses = torch.cat(reprojection_losses, 1)
+
+                if not self.opt.disable_automasking:
+                    identity_reprojection_losses = []
+                    for frame_id in self.opt.frame_ids[1:]:
+                        pred = inputs[("color", frame_id, source_scale)]
+                        identity_reprojection_losses.append(
+                            self.compute_reprojection_loss(pred, target))
+
+                    identity_reprojection_losses = torch.cat(identity_reprojection_losses, 1)
+
+                    if self.opt.avg_reprojection:
+                        identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+                    else:
+                        # save both images, and do min all at once below
+                        identity_reprojection_loss = identity_reprojection_losses
+
+                elif self.opt.predictive_mask:
+                    # use the predicted mask
+                    mask = outputs["predictive_mask"]["disp", scale]
+                    if not self.opt.v1_multiscale:
+                        mask = F.interpolate(
+                            mask, [self.opt.height, self.opt.width],
+                            mode="bilinear", align_corners=False)
+
+                    reprojection_losses *= mask
+
+                    # add a loss pushing mask to 1 (using nn.BCELoss for stability)
+                    weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
+                    loss += weighting_loss.mean()
 
                 if self.opt.avg_reprojection:
-                    identity_reprojection_loss = identity_reprojection_losses.mean(1, keepdim=True)
+                    reprojection_loss = reprojection_losses.mean(1, keepdim=True)
                 else:
-                    # save both images, and do min all at once below
-                    identity_reprojection_loss = identity_reprojection_losses
+                    reprojection_loss = reprojection_losses
 
-            elif self.opt.predictive_mask:
-                # use the predicted mask
-                mask = outputs["predictive_mask"]["disp", scale]
-                if not self.opt.v1_multiscale:
-                    mask = F.interpolate(
-                        mask, [self.opt.height, self.opt.width],
-                        mode="bilinear", align_corners=False)
+                if not self.opt.disable_automasking:
+                    # add random numbers to break ties
+                    identity_reprojection_loss += torch.randn(
+                        identity_reprojection_loss.shape, device=self.device) * 0.00001
 
-                reprojection_losses *= mask
+                    combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
+                else:
+                    combined = reprojection_loss
 
-                # add a loss pushing mask to 1 (using nn.BCELoss for stability)
-                weighting_loss = 0.2 * nn.BCELoss()(mask, torch.ones(mask.shape).cuda())
-                loss += weighting_loss.mean()
+                if combined.shape[1] == 1:
+                    to_optimise = combined
+                else:
+                    to_optimise, idxs = torch.min(combined, dim=1)
 
-            if self.opt.avg_reprojection:
-                reprojection_loss = reprojection_losses.mean(1, keepdim=True)
-            else:
-                reprojection_loss = reprojection_losses
+                if not self.opt.disable_automasking:
+                    outputs["identity_selection/{}".format(scale)] = (
+                        idxs > identity_reprojection_loss.shape[1] - 1).float()
 
-            if not self.opt.disable_automasking:
-                # add random numbers to break ties
-                identity_reprojection_loss += torch.randn(
-                    identity_reprojection_loss.shape, device=self.device) * 0.00001
+                loss += to_optimise.mean()
 
-                combined = torch.cat((identity_reprojection_loss, reprojection_loss), dim=1)
-            else:
-                combined = reprojection_loss
+                mean_disp = disp.mean(2, True).mean(3, True)
+                norm_disp = disp / (mean_disp + 1e-7)
+                smooth_loss = get_smooth_loss(norm_disp, color)
 
-            if combined.shape[1] == 1:
-                to_optimise = combined
-            else:
-                to_optimise, idxs = torch.min(combined, dim=1)
-
-            if not self.opt.disable_automasking:
-                outputs["identity_selection/{}".format(scale)] = (
-                    idxs > identity_reprojection_loss.shape[1] - 1).float()
-
-            loss += to_optimise.mean()
-
-            mean_disp = disp.mean(2, True).mean(3, True)
-            norm_disp = disp / (mean_disp + 1e-7)
-            smooth_loss = get_smooth_loss(norm_disp, color)
-
-            loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
-            total_loss += loss
-            losses["loss/{}".format(scale)] = loss
+                loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
+                total_loss += loss
+                losses["loss/{}".format(scale)] = loss
 
         total_loss /= self.num_scales
         losses["loss"] = total_loss
@@ -636,31 +743,39 @@ class Trainer:
             writer.add_scalar("{}".format(l), v, self.step)
 
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
-            for s in self.opt.scales:
-                for frame_id in self.opt.frame_ids:
-                    writer.add_image(
-                        "color_{}_{}/{}".format(frame_id, s, j),
-                        inputs[("color", frame_id, s)][j].data, self.step)
-                    if s == 0 and frame_id != 0:
+            if self.opt.optical_flow is not None:
+
+                writer.add_image('flow_prev_curr', outputs['flow'][0]['level2_upsampled'][j], self.step)
+                writer.add_image('flow_curr_next', outputs['flow'][1]['level2_upsampled'][j], self.step)
+                writer.add_image('curr_warped_by_flow', outputs[("warped_flow", 0, 'level2_upsampled')][j], self.step)
+                writer.add_image('next_warped_by_flow', outputs[("warped_flow", 1, 'level2_upsampled')][j], self.step)
+            
+            if self.opt.depth_branch:
+                for s in self.opt.scales:
+                    for frame_id in self.opt.frame_ids:
                         writer.add_image(
-                            "color_pred_{}_{}/{}".format(frame_id, s, j),
-                            outputs[("color", frame_id, s)][j].data, self.step)
+                            "color_{}_{}/{}".format(frame_id, s, j),
+                            inputs[("color", frame_id, s)][j].data, self.step)
+                        if s == 0 and frame_id != 0:
+                            writer.add_image(
+                                "color_pred_{}_{}/{}".format(frame_id, s, j),
+                                outputs[("color", frame_id, s)][j].data, self.step)
 
-                writer.add_image(
-                    "disp_{}/{}".format(s, j),
-                    normalize_image(outputs[("disp", s)][j]), self.step)
-
-                if self.opt.predictive_mask:
-                    for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
-                        writer.add_image(
-                            "predictive_mask_{}_{}/{}".format(frame_id, s, j),
-                            outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
-                            self.step)
-
-                elif not self.opt.disable_automasking:
                     writer.add_image(
-                        "automask_{}/{}".format(s, j),
-                        outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
+                        "disp_{}/{}".format(s, j),
+                        normalize_image(outputs[("disp", s)][j]), self.step)
+
+                    if self.opt.predictive_mask:
+                        for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):
+                            writer.add_image(
+                                "predictive_mask_{}_{}/{}".format(frame_id, s, j),
+                                outputs["predictive_mask"][("disp", s)][j, f_idx][None, ...],
+                                self.step)
+
+                    elif not self.opt.disable_automasking:
+                        writer.add_image(
+                            "automask_{}/{}".format(s, j),
+                            outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
