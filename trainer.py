@@ -23,6 +23,7 @@ from layers import *
 
 import datasets
 import networks
+from networks.transformers.transformers import SelfAttention
 from IPython import embed
 
 
@@ -38,7 +39,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:2")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -58,6 +59,10 @@ class Trainer:
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
+
+        self.models["self_att"] = SelfAttention()
+        self.models["self_att"].to(self.device)
+        self.parameters_to_train += list(self.models["self_att"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
@@ -81,7 +86,9 @@ class Trainer:
 
             elif self.opt.pose_model_type == "shared":
                 self.models["pose"] = networks.PoseDecoder(
-                    self.models["encoder"].num_ch_enc, self.num_pose_frames)
+                    self.models["encoder"].num_ch_enc, self.num_pose_frames, 
+                    # inter_output=self.opt.refine_pred
+                    )
 
             elif self.opt.pose_model_type == "posecnn":
                 self.models["pose"] = networks.PoseCNN(
@@ -89,6 +96,10 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
+
+            # if self.opt.refine_pred:
+            #     self.models["att_pose"] = nn.MultiheadAttention(embed_dim=128, num_heads=4, dropout=0.5, device=self.device)
+            #     self.parameters_to_train += list(self.models["att_pose"].parameters())
         
         if self.opt.optical_flow in ["flownet",]:
             # TODO: dimesions change
@@ -302,6 +313,10 @@ class Trainer:
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
 
+            # self attention to refine feature
+            if self.opt.self_att:
+                features = self.models["self_att"](features)
+
             outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
@@ -349,7 +364,17 @@ class Trainer:
                     elif self.opt.pose_model_type == "posecnn":
                         pose_inputs = torch.cat(pose_inputs, 1)
 
+                    
+
+                    # if self.opt.refine_pred:
+                    #     pose = self.models["pose"](pose_inputs)
+                    #     # TODO: use attention
+                        
+                    #     axisangle = axisangle
+                    #     translation = translation
+                    # else:
                     axisangle, translation = self.models["pose"](pose_inputs)
+
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
 
@@ -581,6 +606,11 @@ class Trainer:
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
             total_loss += loss
             losses["loss/{}".format(scale)] = loss
+
+            if scale == 0:
+                losses["loss/ident"] = identity_reprojection_loss.mean()
+                losses["loss/reproj"] = reprojection_loss.mean()
+                losses["loss/combined"] = to_optimise.mean()
 
         total_loss /= self.num_scales
         losses["loss"] = total_loss

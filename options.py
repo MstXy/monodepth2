@@ -79,16 +79,23 @@ class MonodepthOptions:
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
+        # refine prediction --------------------
+        self.parser.add_argument("--self_att",
+                                 type=bool,
+                                 help="use transformer block to refine feature",
+                                 default=True)
+        # -----------------------------
         # full stereo ------------------------
         self.parser.add_argument("--full_stereo",
                                  help="if set, uses stereo pair for all adjacent frames (if any) in training",
-                                 action="store_true")
+                                 action="store_true",
+                                 default=True)
         # ------------------------
         # optical flow branch ----------------
         self.parser.add_argument("--optical_flow",
                                  type=str,
                                  help="optical flow model",
-                                 default="flownet")
+                                 default="na") # TODO: change back to flownet
         # ------------------------
 
         self.parser.add_argument("--frame_ids",
@@ -101,7 +108,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=12)
+                                 default=8)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
