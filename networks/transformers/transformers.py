@@ -101,7 +101,7 @@ class MultiHeadAttentionOne(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim=[64,64,128,256,512], num_heads=1):
+    def __init__(self, embed_dim=[64,64,128,256,512], num_heads=2):
         super().__init__()
 
         # self.att0 = MultiHeadAttentionOne(num_heads, embed_dim[0], embed_dim[0], embed_dim[0])

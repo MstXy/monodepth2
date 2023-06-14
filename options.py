@@ -79,11 +79,27 @@ class MonodepthOptions:
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
-        # refine prediction --------------------
+        # feature refine --------------------
         self.parser.add_argument("--self_att",
                                  type=bool,
                                  help="use transformer block to refine feature",
+                                 default=False)
+
+        self.parser.add_argument("--psp",
+                                 type=bool,
+                                 help="use ppm block to refine feature",
+                                 default=False)
+        
+        self.parser.add_argument("--aspp",
+                                 type=bool,
+                                 help="use aspp block to refine feature",
                                  default=True)
+        # -----------------------------
+        # prediction refine --------------------
+        self.parser.add_argument("--refine_pred",
+                                 type=bool,
+                                 help="use transformer block to refine prediction",
+                                 default=False)
         # -----------------------------
         # full stereo ------------------------
         self.parser.add_argument("--full_stereo",
@@ -116,7 +132,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=10) # 20
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",

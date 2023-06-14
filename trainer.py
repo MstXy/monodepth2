@@ -24,8 +24,18 @@ from layers import *
 import datasets
 import networks
 from networks.transformers.transformers import SelfAttention
+from networks.pspnet.pspnet import PPM
+from networks.aspp.aspp import ASPP
 from IPython import embed
 
+def set_seed(seed):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+set_seed(42)
 
 class Trainer:
     def __init__(self, options):
@@ -39,7 +49,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:2")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:3")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -60,9 +70,23 @@ class Trainer:
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
-        self.models["self_att"] = SelfAttention()
-        self.models["self_att"].to(self.device)
-        self.parameters_to_train += list(self.models["self_att"].parameters())
+        if self.opt.self_att:
+            self.models["self_att"] = SelfAttention()
+            self.models["self_att"].to(self.device)
+            self.parameters_to_train += list(self.models["self_att"].parameters())
+        elif self.opt.psp:
+            fea_dim = 512
+            bins = [1,2,3,6]
+            self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins)
+            self.models["psp"].to(self.device)
+            self.parameters_to_train += list(self.models["psp"].parameters())
+        elif self.opt.aspp:
+            fea_dim = 512
+            atrous_rates=[6, 12, 18]
+            self.models["aspp"] = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
+            self.models["aspp"].to(self.device)
+            self.parameters_to_train += list(self.models["aspp"].parameters())
+            print(sum(p.numel() for p in self.models["aspp"].parameters() if p.requires_grad))
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
@@ -316,6 +340,12 @@ class Trainer:
             # self attention to refine feature
             if self.opt.self_att:
                 features = self.models["self_att"](features)
+            # psp to refine feature
+            elif self.opt.psp:
+                features = self.models["psp"](features)
+            # aspp to refine feature
+            elif self.opt.aspp:
+                features = self.models["aspp"](features)
 
             outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
