@@ -30,7 +30,7 @@ class MultiHeadAttentionOne(nn.Module):
     Multi-Head Attention module with shared projection
     """
 
-    def __init__(self, n_head, d_model, d_k, d_v, dropout=0.5):
+    def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
         super(MultiHeadAttentionOne, self).__init__()
         self.n_head = n_head
         self.d_k = d_k
@@ -101,14 +101,14 @@ class MultiHeadAttentionOne(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim=[64,64,128,256,512], num_heads=2):
+    def __init__(self, embed_dim=[64,64,128,256,512], num_heads=2, dropout=0.1):
         super().__init__()
 
         # self.att0 = MultiHeadAttentionOne(num_heads, embed_dim[0], embed_dim[0], embed_dim[0])
         # self.att1 = MultiHeadAttentionOne(num_heads, embed_dim[1], embed_dim[1], embed_dim[1])
         # self.att2 = MultiHeadAttentionOne(num_heads, embed_dim[2], embed_dim[2], embed_dim[2])
         # self.att3 = MultiHeadAttentionOne(num_heads, embed_dim[3], embed_dim[3], embed_dim[3])
-        self.att4 = MultiHeadAttentionOne(num_heads, embed_dim[4], embed_dim[4], embed_dim[4])
+        self.att4 = MultiHeadAttentionOne(num_heads, embed_dim[4], embed_dim[4], embed_dim[4], dropout=dropout)
 
         self.att = [
                     None, # self.att0, 

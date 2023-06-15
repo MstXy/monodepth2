@@ -23,9 +23,7 @@ from layers import *
 
 import datasets
 import networks
-from networks.transformers.transformers import SelfAttention
-from networks.pspnet.pspnet import PPM
-from networks.aspp.aspp import ASPP
+from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from IPython import embed
 
 def set_seed(seed):
@@ -49,7 +47,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:3")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:1")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -71,13 +69,15 @@ class Trainer:
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
         if self.opt.self_att:
-            self.models["self_att"] = SelfAttention()
+            dropout = 0.1
+            self.models["self_att"] = SelfAttention(num_heads=1, dropout=dropout)
             self.models["self_att"].to(self.device)
             self.parameters_to_train += list(self.models["self_att"].parameters())
         elif self.opt.psp:
             fea_dim = 512
             bins = [1,2,3,6]
-            self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins)
+            dropout = 0.3
+            self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins, dropout=dropout)
             self.models["psp"].to(self.device)
             self.parameters_to_train += list(self.models["psp"].parameters())
         elif self.opt.aspp:
@@ -86,7 +86,23 @@ class Trainer:
             self.models["aspp"] = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
             self.models["aspp"].to(self.device)
             self.parameters_to_train += list(self.models["aspp"].parameters())
-            print(sum(p.numel() for p in self.models["aspp"].parameters() if p.requires_grad))
+            # print(sum(p.numel() for p in self.models["aspp"].parameters() if p.requires_grad))
+        elif self.opt.apnb:
+            fea_dim = 512
+            dropout = 0.05
+            self.models["apnb"] = APNB(in_channels=fea_dim, out_channels=fea_dim, key_channels=256, value_channels=256, dropout=dropout, norm_type="batchnorm")
+            self.models["apnb"].to(self.device)
+            self.parameters_to_train += list(self.models["apnb"].parameters())
+        elif self.opt.afnb:
+            low_fea_dim = 256
+            high_fea_dim = 512
+            fea_dim = 512
+            kv_dim = 128
+            dropout = 0.05
+            self.models["afnb"] = AFNB(low_in_channels=low_fea_dim, high_in_channels=high_fea_dim, 
+                                       out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
+            self.models["afnb"].to(self.device)
+            self.parameters_to_train += list(self.models["afnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
@@ -346,6 +362,12 @@ class Trainer:
             # aspp to refine feature
             elif self.opt.aspp:
                 features = self.models["aspp"](features)
+            # apnb to refine feature
+            elif self.opt.apnb:
+                features = self.models["apnb"](features)
+            # afnb to refine feature
+            elif self.opt.afnb:
+                features = self.models["afnb"](features)
 
             outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:

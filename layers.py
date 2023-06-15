@@ -267,3 +267,35 @@ def compute_depth_errors(gt, pred):
     sq_rel = torch.mean((gt - pred) ** 2 / gt)
 
     return abs_rel, sq_rel, rmse, rmse_log, a1, a2, a3
+
+
+
+def BNReLU(num_features, norm_type=None, **kwargs):
+        if norm_type == 'batchnorm':
+            return nn.Sequential(
+                nn.BatchNorm2d(num_features, **kwargs),
+                nn.ReLU()
+            )
+        elif norm_type == 'sync_batchnorm':
+            from extensions.ops.sync_bn.syncbn import BatchNorm2d
+            return nn.Sequential(
+                BatchNorm2d(num_features, **kwargs),
+                nn.ReLU()
+            )
+        elif norm_type == 'encsync_batchnorm':
+            from encoding.nn import BatchNorm2d
+            return nn.Sequential(
+                BatchNorm2d(num_features, **kwargs),
+                nn.ReLU()
+            )
+        elif norm_type == 'instancenorm':
+            return nn.Sequential(
+                nn.InstanceNorm2d(num_features, **kwargs),
+                nn.ReLU()
+            )
+        # elif bn_type == 'inplace_abn':
+        #    from extensions.ops.inplace_abn.bn import InPlaceABNSync
+        #    return InPlaceABNSync(num_features, **kwargs)
+        else:
+            Log.error('Not support BN type: {}.'.format(norm_type))
+            exit(1)

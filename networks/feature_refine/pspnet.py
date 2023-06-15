@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 class PPM(nn.Module):
-    def __init__(self, in_dim, reduction_dim, bins, dropout=0.5):
+    def __init__(self, in_dim, reduction_dim, bins, dropout=0.3):
         super(PPM, self).__init__()
         self.features = []
         self.bottleneck_dim = in_dim
