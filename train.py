@@ -9,10 +9,20 @@ from __future__ import absolute_import, division, print_function
 from trainer import Trainer
 from options import MonodepthOptions
 
+import numpy as np
+import torch
+
 options = MonodepthOptions()
 opts = options.parse()
 
+def set_seed(seed):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 if __name__ == "__main__":
+    set_seed(42)
     trainer = Trainer(opts)
     trainer.train()

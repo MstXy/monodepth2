@@ -26,14 +26,6 @@ import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from IPython import embed
 
-def set_seed(seed):
-    import random
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-set_seed(42)
 
 class Trainer:
     def __init__(self, options):
@@ -47,7 +39,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:1")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:0")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -103,6 +95,23 @@ class Trainer:
                                        out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
             self.models["afnb"].to(self.device)
             self.parameters_to_train += list(self.models["afnb"].parameters())
+        elif self.opt.ann:
+            # AFNB: fusion
+            low_fea_dim = 256
+            high_fea_dim = 512
+            fea_dim = 512
+            kv_dim = 128
+            dropout = 0.05
+            self.models["afnb"] = AFNB(low_in_channels=low_fea_dim, high_in_channels=high_fea_dim, 
+                                       out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
+            self.models["afnb"].to(self.device)
+            self.parameters_to_train += list(self.models["afnb"].parameters())
+            # APNB: self-att
+            fea_dim = 512
+            dropout = 0.05
+            self.models["apnb"] = APNB(in_channels=fea_dim, out_channels=fea_dim, key_channels=256, value_channels=256, dropout=dropout, norm_type="batchnorm")
+            self.models["apnb"].to(self.device)
+            self.parameters_to_train += list(self.models["apnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales)
@@ -368,6 +377,9 @@ class Trainer:
             # afnb to refine feature
             elif self.opt.afnb:
                 features = self.models["afnb"](features)
+            elif self.opt.ann:
+                features = self.models["afnb"](features)
+                features = self.models["apnb"](features)
 
             outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
@@ -433,6 +445,26 @@ class Trainer:
                     # Invert the matrix if the frame id is negative
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+                    
+                elif self.opt.full_stereo: # is right view & full_stereo: s_0, s_-1, s_1
+                    if int(f_i.split("_")) == 0: # s_0
+                        f_i = "s_" + str(f_i)
+                        outputs[("cam_T_cam", 0, f_i)] = inputs["stereo_T"]
+                    else: # s_-1, s_1
+                        if int(f_i.split("_")) < 0:
+                            pose_inputs = [pose_feats[f_i], pose_feats[0]]
+                        else:
+                            pose_inputs = [pose_feats[0], pose_feats[f_i]]
+
+                        axisangle, translation = self.models["pose"](pose_inputs)
+
+                        outputs[("axisangle", 0, f_i)] = axisangle
+                        outputs[("translation", 0, f_i)] = translation
+
+                        # Invert the matrix if the frame id is negative
+                        outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
+                            axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
@@ -523,11 +555,14 @@ class Trainer:
             outputs[("depth", 0, scale)] = depth
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
-
-                if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
-                    T = inputs["stereo_T"]
-                else:
+                
+                if self.opt.full_stereo:
                     T = outputs[("cam_T_cam", 0, frame_id)]
+                else: # normal one frame stereo
+                    if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
+                        T = inputs["stereo_T"]
+                    else:
+                        T = outputs[("cam_T_cam", 0, frame_id)]
 
                 # from the authors of https://arxiv.org/abs/1712.00175
                 if self.opt.pose_model_type == "posecnn":

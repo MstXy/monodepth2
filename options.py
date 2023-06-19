@@ -103,7 +103,12 @@ class MonodepthOptions:
         self.parser.add_argument("--afnb",
                                  type=bool,
                                  help="use afnb block to refine feature",
-                                 default=True)
+                                 default=False)
+        
+        self.parser.add_argument("--ann",
+                                 type=bool,
+                                 help="use afnb+apnb block to refine feature",
+                                 default=False)
         # -----------------------------
         # prediction refine --------------------
         self.parser.add_argument("--refine_pred",
