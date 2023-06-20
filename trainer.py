@@ -24,6 +24,7 @@ from layers import *
 import datasets
 import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
+from networks.dilated_resnet import dilated_resnet18
 from IPython import embed
 
 
@@ -39,7 +40,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:0")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:2")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -55,8 +56,14 @@ class Trainer:
         if self.opt.full_stereo:
             self.opt.frame_ids += ["s_" + str(i) for i in self.opt.frame_ids]
 
-        self.models["encoder"] = networks.ResnetEncoder(
-            self.opt.num_layers, self.opt.weights_init == "pretrained")
+        # dilated ResNet?
+        if self.opt.drn:
+            # default to res18
+            self.models["encoder"] = dilated_resnet18(
+                self.opt.weights_init == "pretrained")
+        else:
+            self.models["encoder"] = networks.ResnetEncoder(
+                self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
@@ -114,7 +121,7 @@ class Trainer:
             self.parameters_to_train += list(self.models["apnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales)
+            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -446,24 +453,23 @@ class Trainer:
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
                     
-                elif self.opt.full_stereo: # is right view & full_stereo: s_0, s_-1, s_1
-                    if int(f_i.split("_")) == 0: # s_0
-                        f_i = "s_" + str(f_i)
-                        outputs[("cam_T_cam", 0, f_i)] = inputs["stereo_T"]
-                    else: # s_-1, s_1
-                        if int(f_i.split("_")) < 0:
-                            pose_inputs = [pose_feats[f_i], pose_feats[0]]
-                        else:
-                            pose_inputs = [pose_feats[0], pose_feats[f_i]]
+                # elif self.opt.full_stereo: # is right view & full_stereo: s_0, s_-1, s_1
+                #     if int(f_i.split("_")[1]) == 0: # s_0
+                #         outputs[("cam_T_cam", 0, f_i)] = inputs["stereo_T"]
+                #     else: # s_-1, s_1
+                #         if int(f_i.split("_")[1]) < 0:
+                #             pose_inputs = [pose_feats[f_i], pose_feats[0]]
+                #         else:
+                #             pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
-                        axisangle, translation = self.models["pose"](pose_inputs)
+                #         axisangle, translation = self.models["pose"](pose_inputs)
 
-                        outputs[("axisangle", 0, f_i)] = axisangle
-                        outputs[("translation", 0, f_i)] = translation
+                #         outputs[("axisangle", 0, f_i)] = axisangle
+                #         outputs[("translation", 0, f_i)] = translation
 
-                        # Invert the matrix if the frame id is negative
-                        outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
-                            axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+                #         # Invert the matrix if the frame id is negative
+                #         outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
+                #             axisangle[:, 0], translation[:, 0], invert=(int(f_i.split("_")[1]) < 0))
 
 
         else:
@@ -556,13 +562,13 @@ class Trainer:
 
             for i, frame_id in enumerate(self.opt.frame_ids[1:]):
                 
-                if self.opt.full_stereo:
+                # if self.opt.full_stereo:
+                #     T = outputs[("cam_T_cam", 0, frame_id)]
+                # else: # normal one frame stereo
+                if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
+                    T = inputs["stereo_T"]
+                else:
                     T = outputs[("cam_T_cam", 0, frame_id)]
-                else: # normal one frame stereo
-                    if isinstance(frame_id, str): # s_0, s_-1, s_1, ...
-                        T = inputs["stereo_T"]
-                    else:
-                        T = outputs[("cam_T_cam", 0, frame_id)]
 
                 # from the authors of https://arxiv.org/abs/1712.00175
                 if self.opt.pose_model_type == "posecnn":
@@ -582,7 +588,7 @@ class Trainer:
                     cam_points, inputs[("K", source_scale)], T)
 
                 outputs[("sample", frame_id, scale)] = pix_coords
-
+            
                 outputs[("color", frame_id, scale)] = F.grid_sample(
                     inputs[("color", frame_id, source_scale)],
                     outputs[("sample", frame_id, scale)],

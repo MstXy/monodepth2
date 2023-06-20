@@ -15,7 +15,7 @@ from layers import *
 
 
 class DepthDecoder(nn.Module):
-    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, inter_output=False):
+    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, inter_output=False, drn=False):
         super(DepthDecoder, self).__init__()
 
         self.num_output_channels = num_output_channels
@@ -27,6 +27,9 @@ class DepthDecoder(nn.Module):
 
         self.num_ch_enc = num_ch_enc
         self.num_ch_dec = np.array([16, 32, 64, 128, 256])
+
+        # dilated backbone
+        self.drn = drn
 
         # decoder
         self.convs = OrderedDict()
@@ -56,7 +59,10 @@ class DepthDecoder(nn.Module):
         x = input_features[-1]
         for i in range(4, -1, -1):
             x = self.convs[("upconv", i, 0)](x)
-            x = [upsample(x)]
+            if self.drn:
+                x = [upsample(x)] if i not in [3, 4] else [x]
+            else:
+                x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
             x = torch.cat(x, 1)

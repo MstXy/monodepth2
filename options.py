@@ -79,6 +79,12 @@ class MonodepthOptions:
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true")
+        # dilated resnet --------------------
+        self.parser.add_argument("--drn",
+                                 type=bool,
+                                 help="use dilated resnet as backbone",
+                                 default=True)
+        # -----------------------------
         # feature refine --------------------
         self.parser.add_argument("--self_att",
                                  type=bool,
@@ -88,7 +94,7 @@ class MonodepthOptions:
         self.parser.add_argument("--psp",
                                  type=bool,
                                  help="use ppm block to refine feature",
-                                 default=False)
+                                 default=True)
         
         self.parser.add_argument("--aspp",
                                  type=bool,
@@ -139,7 +145,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=6)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
