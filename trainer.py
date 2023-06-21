@@ -40,7 +40,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:2")
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:1")
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -72,27 +72,27 @@ class Trainer:
             self.models["self_att"] = SelfAttention(num_heads=1, dropout=dropout)
             self.models["self_att"].to(self.device)
             self.parameters_to_train += list(self.models["self_att"].parameters())
-        elif self.opt.psp:
+        if self.opt.psp:
             fea_dim = 512
             bins = [1,2,3,6]
             dropout = 0.3
             self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins, dropout=dropout)
             self.models["psp"].to(self.device)
             self.parameters_to_train += list(self.models["psp"].parameters())
-        elif self.opt.aspp:
+        if self.opt.aspp:
             fea_dim = 512
             atrous_rates=[6, 12, 18]
             self.models["aspp"] = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
             self.models["aspp"].to(self.device)
             self.parameters_to_train += list(self.models["aspp"].parameters())
             # print(sum(p.numel() for p in self.models["aspp"].parameters() if p.requires_grad))
-        elif self.opt.apnb:
+        if self.opt.apnb:
             fea_dim = 512
             dropout = 0.05
             self.models["apnb"] = APNB(in_channels=fea_dim, out_channels=fea_dim, key_channels=256, value_channels=256, dropout=dropout, norm_type="batchnorm")
             self.models["apnb"].to(self.device)
             self.parameters_to_train += list(self.models["apnb"].parameters())
-        elif self.opt.afnb:
+        if self.opt.afnb:
             low_fea_dim = 256
             high_fea_dim = 512
             fea_dim = 512
@@ -102,7 +102,7 @@ class Trainer:
                                        out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
             self.models["afnb"].to(self.device)
             self.parameters_to_train += list(self.models["afnb"].parameters())
-        elif self.opt.ann:
+        if self.opt.ann:
             # AFNB: fusion
             low_fea_dim = 256
             high_fea_dim = 512
@@ -369,24 +369,25 @@ class Trainer:
             for i, k in enumerate(self.opt.frame_ids):
                 features[k] = [f[i] for f in all_features]
 
+
+            # psp to refine feature
+            if self.opt.psp:
+                features = self.models["psp"](features)
+            # aspp to refine feature
+            if self.opt.aspp:
+                features = self.models["aspp"](features)
+            # apnb to refine feature
+            if self.opt.apnb:
+                features = self.models["apnb"](features)
+            # afnb to refine feature
+            if self.opt.afnb:
+                features = self.models["afnb"](features)
+            if self.opt.ann:
+                features = self.models["afnb"](features)
+                features = self.models["apnb"](features)
             # self attention to refine feature
             if self.opt.self_att:
                 features = self.models["self_att"](features)
-            # psp to refine feature
-            elif self.opt.psp:
-                features = self.models["psp"](features)
-            # aspp to refine feature
-            elif self.opt.aspp:
-                features = self.models["aspp"](features)
-            # apnb to refine feature
-            elif self.opt.apnb:
-                features = self.models["apnb"](features)
-            # afnb to refine feature
-            elif self.opt.afnb:
-                features = self.models["afnb"](features)
-            elif self.opt.ann:
-                features = self.models["afnb"](features)
-                features = self.models["apnb"](features)
 
             outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:

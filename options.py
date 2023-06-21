@@ -78,7 +78,8 @@ class MonodepthOptions:
                                  default=100.0)
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
-                                 action="store_true")
+                                 action="store_true",
+                                 default=True)
         # dilated resnet --------------------
         self.parser.add_argument("--drn",
                                  type=bool,
@@ -94,12 +95,12 @@ class MonodepthOptions:
         self.parser.add_argument("--psp",
                                  type=bool,
                                  help="use ppm block to refine feature",
-                                 default=True)
+                                 default=False)
         
         self.parser.add_argument("--aspp",
                                  type=bool,
                                  help="use aspp block to refine feature",
-                                 default=False)
+                                 default=True)
         
         self.parser.add_argument("--apnb",
                                  type=bool,
@@ -126,7 +127,7 @@ class MonodepthOptions:
         self.parser.add_argument("--full_stereo",
                                  help="if set, uses stereo pair for all adjacent frames (if any) in training",
                                  action="store_true",
-                                 default=True)
+                                 default=False)
         # ------------------------
         # optical flow branch ----------------
         self.parser.add_argument("--optical_flow",
@@ -145,7 +146,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=6)
+                                 default=8)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -222,9 +223,23 @@ class MonodepthOptions:
                                  default=1)
 
         # EVALUATION options
+        # refiner--------------------
+        self.parser.add_argument("--eval_refiner",
+                                 help="if set evaluates with refiner module",
+                                 action="store_true", 
+                                 default=False)
+        self.parser.add_argument("--single_refiner",
+                                 help="if set evaluates with refiner module",
+                                 action="store_true", 
+                                 default=False)
+        # -----------------------
+        
+        
         self.parser.add_argument("--eval_stereo",
                                  help="if set evaluates in stereo mode",
-                                 action="store_true")
+                                 action="store_true",
+                                 default=False # true for full stereo
+                                 )
         self.parser.add_argument("--eval_mono",
                                  help="if set evaluates in mono mode",
                                  action="store_true")

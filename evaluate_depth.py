@@ -6,12 +6,16 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
+import torch.nn as nn
 
 from layers import disp_to_depth
 from utils import readlines
 from options import MonodepthOptions
 import datasets
 import networks
+
+from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
+from networks.dilated_resnet import dilated_resnet18
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
@@ -76,26 +80,131 @@ def evaluate(opt):
 
         filenames = readlines(os.path.join(splits_dir, opt.eval_split, "test_files.txt"))
         encoder_path = os.path.join(opt.load_weights_folder, "encoder.pth")
+
         decoder_path = os.path.join(opt.load_weights_folder, "depth.pth")
 
-        encoder_dict = torch.load(encoder_path)
+        encoder_dict = torch.load(encoder_path, map_location='cpu')
 
         dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False)
+                                           [0], 4, is_train=False, img_ext='.png')
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
-        encoder = networks.ResnetEncoder(opt.num_layers, False)
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc)
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
+            print("using dilated ResNet")
+            encoder = dilated_resnet18()
+        else:
+            encoder = networks.ResnetEncoder(opt.num_layers, False)
+
+        # refiner: ---------
+        if opt.eval_refiner:
+            print("Eval with refiner module.")
+            
+            refiner_name = opt.load_weights_folder.split("/")[-3].split("_")[0]
+            print(refiner_name)
+            if refiner_name == "att":
+                refiner_name = "self_att"
+            if refiner_name == "drn":
+                print("we are using dilated resnet")
+                refiner_name = opt.load_weights_folder.split("/")[-3].split("_")[1]
+                print("now use {} refiner".format(refiner_name))
+
+            if opt.single_refiner:
+                refiner = None
+
+                if refiner_name == "self_att":
+                    print("evaluting with self att")
+                    dropout = 0.1
+                    refiner = SelfAttention(num_heads=1, dropout=dropout)
+
+                if refiner_name == "psp":
+                    print("evaluting with psp")
+                    fea_dim = 512
+                    bins = [1,2,3,6]
+                    dropout = 0.3
+                    refiner = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins, dropout=dropout)
+
+                if refiner_name == "aspp":
+                    print("evaluting with aspp")
+                    fea_dim = 512
+                    atrous_rates=[6, 12, 18]
+                    refiner = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
+
+                if refiner_name == "apnb":
+                    print("evaluting with apnb")
+                    fea_dim = 512
+                    dropout = 0.05
+                    refiner = APNB(in_channels=fea_dim, out_channels=fea_dim, key_channels=256, value_channels=256, dropout=dropout, norm_type="batchnorm")
+
+                if refiner_name == "afnb":
+                    print("evaluting with afnb")
+                    low_fea_dim = 256
+                    high_fea_dim = 512
+                    fea_dim = 512
+                    kv_dim = 128
+                    dropout = 0.05
+                    refiner = AFNB(low_in_channels=low_fea_dim, high_in_channels=high_fea_dim, 
+                                            out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
+                
+                refiner_path = os.path.join(opt.load_weights_folder, "{}.pth".format(refiner_name))
+                refiner.load_state_dict(torch.load(refiner_path, map_location='cpu'))
+                refiner.cuda(device="cuda:1")
+                refiner.eval()
+
+            else:
+                # TODO
+                if refiner_name == "ann":
+                    # AFNB: fusion
+                    low_fea_dim = 256
+                    high_fea_dim = 512
+                    fea_dim = 512
+                    kv_dim = 128
+                    dropout = 0.05
+                    afnb = AFNB(low_in_channels=low_fea_dim, high_in_channels=high_fea_dim, 
+                                            out_channels=fea_dim, key_channels=kv_dim, value_channels=kv_dim, dropout=dropout, norm_type="batchnorm")
+
+                    # APNB: self-att
+                    fea_dim = 512
+                    dropout = 0.05
+                    apnb = APNB(in_channels=fea_dim, out_channels=fea_dim, key_channels=256, value_channels=256, dropout=dropout, norm_type="batchnorm")
+
+                    afnb_path = os.path.join(opt.load_weights_folder, "afnb.pth")
+                    apnb_path = os.path.join(opt.load_weights_folder, "apnb.pth")
+                    afnb.load_state_dict(torch.load(afnb_path, map_location='cpu'))
+                    apnb.load_state_dict(torch.load(apnb_path, map_location='cpu'))
+                    refiner = nn.Sequential(afnb, apnb)
+                    refiner.cuda(device="cuda:1")
+                    refiner.eval()
+                
+                if refiner_name == "asppatt":
+                    print("eval using aspp + att")
+                    fea_dim = 512
+                    atrous_rates=[6, 12, 18]
+                    aspp = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
+
+                    dropout = 0.1
+                    att = SelfAttention(num_heads=1, dropout=dropout)
+
+                    aspp_path = os.path.join(opt.load_weights_folder, "aspp.pth")
+                    att_path = os.path.join(opt.load_weights_folder, "self_att.pth")
+                    aspp.load_state_dict(torch.load(aspp_path, map_location='cpu'))
+                    att.load_state_dict(torch.load(att_path, map_location='cpu'))
+                    refiner = nn.Sequential(aspp, att)
+                    refiner.cuda(device="cuda:1")
+                    refiner.eval()
+
+
+
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn)
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
-        depth_decoder.load_state_dict(torch.load(decoder_path))
+        depth_decoder.load_state_dict(torch.load(decoder_path, map_location='cpu'))
 
-        encoder.cuda()
+        encoder.cuda(device="cuda:1")
         encoder.eval()
-        depth_decoder.cuda()
+        depth_decoder.cuda(device="cuda:1")
         depth_decoder.eval()
 
         pred_disps = []
@@ -105,13 +214,21 @@ def evaluate(opt):
 
         with torch.no_grad():
             for data in dataloader:
-                input_color = data[("color", 0, 0)].cuda()
+                input_color = data[("color", 0, 0)].cuda(device="cuda:1")
 
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
                     input_color = torch.cat((input_color, torch.flip(input_color, [3])), 0)
 
-                output = depth_decoder(encoder(input_color))
+                output = None
+                if not opt.eval_refiner:
+                    output = depth_decoder(encoder(input_color))
+                else:
+                    # refiner:
+                    print("using: " + refiner_name)
+                    output = encoder(input_color)
+                    output = {0: output}
+                    output = depth_decoder(refiner(output)[0])
 
                 pred_disp, _ = disp_to_depth(output[("disp", 0)], opt.min_depth, opt.max_depth)
                 pred_disp = pred_disp.cpu()[:, 0].numpy()
@@ -163,7 +280,7 @@ def evaluate(opt):
         quit()
 
     gt_path = os.path.join(splits_dir, opt.eval_split, "gt_depths.npz")
-    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1')["data"]
+    gt_depths = np.load(gt_path, fix_imports=True, encoding='latin1', allow_pickle=True)["data"]
 
     print("-> Evaluating")
 
