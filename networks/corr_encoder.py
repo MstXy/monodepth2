@@ -1,6 +1,7 @@
 from typing import Dict, Optional, Sequence, Union
 
 import torch
+import torch.nn as nn
 from mmcv.cnn.bricks.conv_module import ConvModule
 
 from .utils import BasicEncoder, CorrBlock
@@ -95,7 +96,7 @@ class CorrEncoder(BasicEncoder):
             Dict[str, Tensor]: The feature pyramid for correlation.
         """
 
-        corr_feat = self.corr(f1, f2) # 441
+        corr_feat = self.corr(f1, f2) # C=441, H3(=12), W3(=40)
         redir_feat = self.conv_redir(f1)
 
         x = torch.cat((redir_feat, corr_feat), dim=1)
@@ -108,3 +109,23 @@ class CorrEncoder(BasicEncoder):
                 outs['level' + str(i + 3)] = x
 
         return outs
+    
+
+class CorrEncoderSimple(nn.Module):
+    def __init__(self, 
+                 corr_cfg: dict = dict(
+                     type='Correlation',
+                     kernel_size=1,
+                     max_displacement=10,
+                     stride=1,
+                     padding=0,
+                     dilation_patch=2),
+                 scaled: bool = False,
+                 act_cfg: dict = dict(type='LeakyReLU', negative_slope=0.1)) -> None:
+
+        self.corr = CorrBlock(corr_cfg, act_cfg, scaled=scaled)
+
+    def forward(self, f1, f2):
+        corr_feat = self.corr(f1, f2) # C=441, H3(=12), W3(=40)
+
+        return corr_feat

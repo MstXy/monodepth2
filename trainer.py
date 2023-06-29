@@ -15,6 +15,8 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 
+import cupy as cp
+
 import json
 
 from utils import *
@@ -40,7 +42,8 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:1")
+        self.device_num = 1 # change for # of GPU
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.device_num))
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -76,13 +79,13 @@ class Trainer:
             fea_dim = 512
             bins = [1,2,3,6]
             dropout = 0.3
-            self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins, dropout=dropout)
+            self.models["psp"] = PPM(in_dim=fea_dim, reduction_dim=int(fea_dim/len(bins)), bins=bins, dropout=dropout, only_current_frame=self.opt.pose_model_type=="separate_resnet")
             self.models["psp"].to(self.device)
             self.parameters_to_train += list(self.models["psp"].parameters())
         if self.opt.aspp:
             fea_dim = 512
             atrous_rates=[6, 12, 18]
-            self.models["aspp"] = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates)
+            self.models["aspp"] = ASPP(in_ch=fea_dim, mid_ch=fea_dim//2, out_ch=fea_dim, rates=atrous_rates, only_current_frame=self.opt.pose_model_type=="separate_resnet")
             self.models["aspp"].to(self.device)
             self.parameters_to_train += list(self.models["aspp"].parameters())
             # print(sum(p.numel() for p in self.models["aspp"].parameters() if p.requires_grad))
@@ -121,7 +124,7 @@ class Trainer:
             self.parameters_to_train += list(self.models["apnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn)
+            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -157,7 +160,10 @@ class Trainer:
             #     self.models["att_pose"] = nn.MultiheadAttention(embed_dim=128, num_heads=4, dropout=0.5, device=self.device)
             #     self.parameters_to_train += list(self.models["att_pose"].parameters())
         
-        if self.opt.optical_flow in ["flownet",]:
+        if self.opt.optical_flow in ["flownet",] or self.opt.depth_cv:
+            # set cupy device
+            cp.cuda.Device(self.device_num).use()
+
             # TODO: dimesions change
             self.models["corr"] = networks.CorrEncoder(
                 in_channels=473,
@@ -185,6 +191,7 @@ class Trainer:
             self.models["corr"].to(self.device)
             self.parameters_to_train += list(self.models["corr"].parameters())
             
+        if self.opt.optical_flow in ["flownet",]:
             self.models["flow"] = networks.FlowNetCDecoder(in_channels=dict(
                     level6=1024, level5=1026, level4=770, level3=386, level2=194),
                 out_channels=dict(level6=512, level5=256, level4=128, level3=64),
@@ -389,7 +396,15 @@ class Trainer:
             if self.opt.self_att:
                 features = self.models["self_att"](features)
 
-            outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
+            if self.opt.depth_cv:
+                # using cost volume for depth prediction
+                corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
+                corr_next_curr = self.models["corr"](features[1][3], features[0][3]) # TODO: keep order or not??
+
+                outputs = self.models["depth"](features[0], corr_prev_curr, corr_next_curr)
+            else:
+                # normal
+                outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
             # Otherwise, we only feed the image with frame_id 0 through the depth encoder
             features = self.models["encoder"](inputs["color_aug", 0, 0])
@@ -729,8 +744,17 @@ class Trainer:
         crop_mask[:, :, 153:371, 44:1197] = 1
         mask = mask * crop_mask
 
+        depth_gt_vis = depth_gt * mask
+        depth_pred_vis = depth_pred * mask
+        
         depth_gt = depth_gt[mask]
         depth_pred = depth_pred[mask]
+
+        # add gt, pred diff vis
+        depth_pred_vis *= torch.median(depth_gt) / torch.median(depth_pred) # median, so use depth_gt, which contains no 0
+        depth_pred_vis = torch.clamp(depth_pred_vis, min=1e-3, max=80)
+        outputs["depth_diff"] = (depth_gt_vis - depth_pred_vis) ** 2
+
         depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
 
         depth_pred = torch.clamp(depth_pred, min=1e-3, max=80)
@@ -773,6 +797,10 @@ class Trainer:
                 writer.add_image(
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
+                
+                # visualize pred & gt diff
+                writer.add_image(
+                    "depth_diff/{}".format(j), outputs["depth_diff"][j].data, self.step)
 
                 if self.opt.predictive_mask:
                     for f_idx, frame_id in enumerate(self.opt.frame_ids[1:]):

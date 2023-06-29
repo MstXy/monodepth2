@@ -27,6 +27,7 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
 
+device_num = 0
 
 def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
@@ -85,17 +86,66 @@ def evaluate(opt):
 
         encoder_dict = torch.load(encoder_path, map_location='cpu')
 
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depcv":
+            print("using cost volume for depth")
+            opt.depth_cv = True
+            import cupy as cp
+            cp.cuda.Device(device_num).use()
+            corrEncoder = networks.CorrEncoder(
+                    in_channels=473,
+                    pyramid_levels=['level3', 'level4', 'level5', 'level6'],
+                    kernel_size=(3, 3, 3, 3),
+                    num_convs=(1, 2, 2, 2),
+                    out_channels=(256, 512, 512, 1024),
+                    redir_in_channels=256,
+                    redir_channels=32,
+                    strides=(1, 2, 2, 2),
+                    dilations=(1, 1, 1, 1),
+                    corr_cfg=dict(
+                        type='Correlation',
+                        kernel_size=1,
+                        max_displacement=10,
+                        stride=1,
+                        padding=0,
+                        dilation_patch=2),
+                    scaled=False,
+                    conv_cfg=None,
+                    norm_cfg=None,
+                    act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
+                )
+            corr_path = os.path.join(opt.load_weights_folder, "corr.pth")
+            corrEncoder.load_state_dict(torch.load(corr_path, map_location='cpu'))
+            corrEncoder.cuda(device="cuda:{}".format(device_num))
+            corrEncoder.eval()
+        else:
+            opt.depth_cv = False
+
+
         dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
-                                           [0], 4, is_train=False, img_ext='.png')
+                                           [0] if not opt.depth_cv else [0, -1, 1], 4, is_train=False, img_ext='.png')
         dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=False)
 
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
             print("using dilated ResNet")
+            opt.drn = True
             encoder = dilated_resnet18()
         else:
+            opt.drn = False
             encoder = networks.ResnetEncoder(opt.num_layers, False)
+        
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
+            print("using depth attention")
+            opt.depth_att = True
+        else:
+            opt.depth_att = False
+
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "c2f":
+            print("using coarse-2-fine")
+            opt.coarse2fine = True
+        else:
+            opt.coarse2fine = False
 
         # refiner: ---------
         if opt.eval_refiner:
@@ -149,11 +199,10 @@ def evaluate(opt):
                 
                 refiner_path = os.path.join(opt.load_weights_folder, "{}.pth".format(refiner_name))
                 refiner.load_state_dict(torch.load(refiner_path, map_location='cpu'))
-                refiner.cuda(device="cuda:1")
+                refiner.cuda(device="cuda:{}".format(device_num))
                 refiner.eval()
 
             else:
-                # TODO
                 if refiner_name == "ann":
                     # AFNB: fusion
                     low_fea_dim = 256
@@ -174,7 +223,7 @@ def evaluate(opt):
                     afnb.load_state_dict(torch.load(afnb_path, map_location='cpu'))
                     apnb.load_state_dict(torch.load(apnb_path, map_location='cpu'))
                     refiner = nn.Sequential(afnb, apnb)
-                    refiner.cuda(device="cuda:1")
+                    refiner.cuda(device="cuda:{}".format(device_num))
                     refiner.eval()
                 
                 if refiner_name == "asppatt":
@@ -191,20 +240,20 @@ def evaluate(opt):
                     aspp.load_state_dict(torch.load(aspp_path, map_location='cpu'))
                     att.load_state_dict(torch.load(att_path, map_location='cpu'))
                     refiner = nn.Sequential(aspp, att)
-                    refiner.cuda(device="cuda:1")
+                    refiner.cuda(device="cuda:{}".format(device_num))
                     refiner.eval()
 
 
 
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn)
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine) 
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
         depth_decoder.load_state_dict(torch.load(decoder_path, map_location='cpu'))
 
-        encoder.cuda(device="cuda:1")
+        encoder.cuda(device="cuda:{}".format(device_num))
         encoder.eval()
-        depth_decoder.cuda(device="cuda:1")
+        depth_decoder.cuda(device="cuda:{}".format(device_num))
         depth_decoder.eval()
 
         pred_disps = []
@@ -214,7 +263,7 @@ def evaluate(opt):
 
         with torch.no_grad():
             for data in dataloader:
-                input_color = data[("color", 0, 0)].cuda(device="cuda:1")
+                input_color = data[("color", 0, 0)].cuda(device="cuda:{}".format(device_num))
 
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
@@ -222,7 +271,13 @@ def evaluate(opt):
 
                 output = None
                 if not opt.eval_refiner:
-                    output = depth_decoder(encoder(input_color))
+                    if opt.depth_cv:
+                        x_1_m = encoder(data[("color", -1, 0)].cuda(device="cuda:{}".format(device_num)))
+                        x_0 = encoder(input_color)
+                        x_1 = encoder(data[("color", 1, 0)].cuda(device="cuda:{}".format(device_num)))
+                        output = depth_decoder(x_0, corrEncoder(x_1_m[3], x_0[3]), corrEncoder(x_1[3], x_0[3]))
+                    else:
+                        output = depth_decoder(encoder(input_color))
                 else:
                     # refiner:
                     print("using: " + refiner_name)
@@ -344,4 +399,7 @@ def evaluate(opt):
 
 if __name__ == "__main__":
     options = MonodepthOptions()
-    evaluate(options.parse())
+    opts = options.parse()
+    # opts.eval_mono = True
+    # opts.load_weights_folder =  "~/tmp/depcv_m/models/weights_14"
+    evaluate(opts)

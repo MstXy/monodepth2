@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 class PPM(nn.Module):
-    def __init__(self, in_dim, reduction_dim, bins, dropout=0.3):
+    def __init__(self, in_dim, reduction_dim, bins, dropout=0.3, only_current_frame=False):
         super(PPM, self).__init__()
         self.features = []
         self.bottleneck_dim = in_dim
@@ -24,10 +24,12 @@ class PPM(nn.Module):
             nn.Dropout2d(p=dropout)
         )
 
+        self.only_current_frame = only_current_frame
+
     def forward(self, x):
 
         for frame_id in x.keys():
-            if not isinstance(frame_id, str): # not right view
+            if (not self.only_current_frame and not isinstance(frame_id, str)) or (self.only_current_frame and frame_id == 0): # not right view / only current frame
                 for idx in range(5):
                     if idx in [4]: # only the last layer?
                         tmp = x[frame_id][idx]

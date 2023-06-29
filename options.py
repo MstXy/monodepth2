@@ -79,12 +79,28 @@ class MonodepthOptions:
         self.parser.add_argument("--use_stereo",
                                  help="if set, uses stereo pair for training",
                                  action="store_true",
-                                 default=True)
+                                 default=False)
         # dilated resnet --------------------
         self.parser.add_argument("--drn",
                                  type=bool,
                                  help="use dilated resnet as backbone",
+                                 default=False)
+        # -----------------------------
+        # improved depth decoder -------------
+        self.parser.add_argument('--depth_att',
+                                 type=bool,
+                                 help="use attention in depth decoder",
+                                 default=False)
+        self.parser.add_argument('--depth_cv',
+                                 type=bool,
+                                 help="use attention in depth decoder",
                                  default=True)
+        # ------------------------------------
+        # prediction refine (coarse-to-fine) --------------------
+        self.parser.add_argument("--coarse2fine",
+                                 type=bool,
+                                 help="use coarse-to-fine to refine prediction",
+                                 default=False)
         # -----------------------------
         # feature refine --------------------
         self.parser.add_argument("--self_att",
@@ -100,7 +116,7 @@ class MonodepthOptions:
         self.parser.add_argument("--aspp",
                                  type=bool,
                                  help="use aspp block to refine feature",
-                                 default=True)
+                                 default=False)
         
         self.parser.add_argument("--apnb",
                                  type=bool,
@@ -115,12 +131,6 @@ class MonodepthOptions:
         self.parser.add_argument("--ann",
                                  type=bool,
                                  help="use afnb+apnb block to refine feature",
-                                 default=False)
-        # -----------------------------
-        # prediction refine --------------------
-        self.parser.add_argument("--refine_pred",
-                                 type=bool,
-                                 help="use transformer block to refine prediction",
                                  default=False)
         # -----------------------------
         # full stereo ------------------------
@@ -154,11 +164,11 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=10) # 20
+                                 default=15) # 20
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=15)
+                                 default=10)
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",
@@ -210,7 +220,9 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=str,
                                  help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose"])
+                                 # default=["encoder", "depth", "pose_encoder", "pose"],
+                                 default=["encoder", "depth", "corr", "pose"],
+                                 )
 
         # LOGGING options
         self.parser.add_argument("--log_frequency",

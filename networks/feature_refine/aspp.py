@@ -46,7 +46,7 @@ class ASPP(nn.Module):
     Atrous spatial pyramid pooling with image-level feature
     """
 
-    def __init__(self, in_ch, mid_ch, out_ch, rates):
+    def __init__(self, in_ch, mid_ch, out_ch, rates, only_current_frame=False):
         super(ASPP, self).__init__()
         self.stages = nn.Module()
         self.stages.add_module("c0", _ConvBnReLU(in_ch, mid_ch, 1, 1, 0, 1))
@@ -61,10 +61,12 @@ class ASPP(nn.Module):
         concat_ch = mid_ch * (len(rates) + 2)
         self.add_module("fc1", _ConvBnReLU(concat_ch, out_ch, 1, 1, 0, 1))
 
+        self.only_current_frame = only_current_frame
+
 
     def forward(self, x):
         for frame_id in x.keys():
-            if not isinstance(frame_id, str): # not right view
+            if (not self.only_current_frame and not isinstance(frame_id, str)) or (self.only_current_frame and frame_id == 0): # not right view / only current frame
                 for idx in range(5):
                     if idx in [4]: # only the last layer?
                         tmp = x[frame_id][idx]

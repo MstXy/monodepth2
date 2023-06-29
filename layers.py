@@ -299,3 +299,97 @@ def BNReLU(num_features, norm_type=None, **kwargs):
         else:
             Log.error('Not support BN type: {}.'.format(norm_type))
             exit(1)
+
+
+
+## ChannelAttetion
+class ChannelAttention(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super(ChannelAttention, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+           
+        self.fc = nn.Sequential(
+            nn.Linear(in_planes,in_planes // ratio, bias = False),
+            nn.ReLU(inplace = True),
+            nn.Linear(in_planes // ratio, in_planes, bias = False)
+        )
+        self.sigmoid = nn.Sigmoid()
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+
+    def forward(self, in_feature):
+        x = in_feature
+        b, c, _, _ = in_feature.size()
+        avg_out = self.fc(self.avg_pool(x).view(b,c)).view(b, c, 1, 1)
+        out = avg_out
+        return self.sigmoid(out).expand_as(in_feature) * in_feature
+
+
+## SpatialAttetion
+
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+        
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+    def forward(self, in_feature):
+        x = in_feature
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x = torch.cat([avg_out, max_out], dim=1)
+        #x = avg_out
+        #x = max_out
+        x = self.conv1(x)
+        return self.sigmoid(x).expand_as(in_feature) * in_feature
+
+#CS means channel-spatial  
+class CS_Block(nn.Module):
+    def __init__(self, in_channel, reduction = 16 ):
+        super(CS_Block, self).__init__()
+        
+        reduction = reduction
+        in_channel = in_channel
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(in_channel, in_channel // reduction, bias = False),
+            nn.ReLU(inplace = True),
+            nn.Linear(in_channel // reduction, in_channel, bias = False)
+            )
+        self.sigmoid = nn.Sigmoid()
+        ## Spatial_Block
+        self.conv = nn.Conv2d(2,1,kernel_size = 1, bias = False)
+        #self.conv = nn.Conv2d(1,1,kernel_size = 1, bias = False)
+        self.relu = nn.ReLU(inplace = True)
+    
+    def forward(self, in_feature):
+
+        b,c,_,_ = in_feature.size()
+        
+        
+        output_weights_avg = self.avg_pool(in_feature).view(b,c)
+        output_weights_max = self.max_pool(in_feature).view(b,c)
+         
+        output_weights_avg = self.fc(output_weights_avg).view(b,c,1,1)
+        output_weights_max = self.fc(output_weights_max).view(b,c,1,1)
+        
+        output_weights = output_weights_avg + output_weights_max
+        
+        output_weights = self.sigmoid(output_weights)
+        out_feature_1 = output_weights.expand_as(in_feature) * in_feature
+        
+        ## Spatial_Block
+        in_feature_avg = torch.mean(out_feature_1,1,True)
+        in_feature_max,_ = torch.max(out_feature_1,1,True)
+        mixed_feature = torch.cat([in_feature_avg,in_feature_max],1)
+        spatial_attention = self.sigmoid(self.conv(mixed_feature))
+        out_feature = spatial_attention.expand_as(out_feature_1) * out_feature_1
+        #########################
+        
+        return out_feature
