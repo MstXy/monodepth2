@@ -42,8 +42,8 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device_num = 1 # change for # of GPU
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.device_num))
+        self.DEVICE_NUM = 3 # change for # of GPU
+        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -58,6 +58,19 @@ class Trainer:
         
         if self.opt.full_stereo:
             self.opt.frame_ids += ["s_" + str(i) for i in self.opt.frame_ids]
+
+        # move utils up
+        self.backproject_depth = {}
+        self.project_3d = {}
+        for scale in self.opt.scales:
+            h = self.opt.height // (2 ** scale)
+            w = self.opt.width // (2 ** scale)
+
+            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
+            self.backproject_depth[scale].to(self.device)
+
+            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w)
+            self.project_3d[scale].to(self.device)
 
         # dilated ResNet?
         if self.opt.drn:
@@ -124,7 +137,8 @@ class Trainer:
             self.parameters_to_train += list(self.models["apnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine)
+            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, corr_levels=self.opt.all_corr_levels,
+                cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -162,31 +176,32 @@ class Trainer:
         
         if self.opt.optical_flow in ["flownet",] or self.opt.depth_cv:
             # set cupy device
-            cp.cuda.Device(self.device_num).use()
+            cp.cuda.Device(self.DEVICE_NUM).use()
 
             # TODO: dimesions change
-            self.models["corr"] = networks.CorrEncoder(
-                in_channels=473,
-                pyramid_levels=['level3', 'level4', 'level5', 'level6'],
-                kernel_size=(3, 3, 3, 3),
-                num_convs=(1, 2, 2, 2),
-                out_channels=(256, 512, 512, 1024),
-                redir_in_channels=256,
-                redir_channels=32,
-                strides=(1, 2, 2, 2),
-                dilations=(1, 1, 1, 1),
-                corr_cfg=dict(
-                    type='Correlation',
-                    kernel_size=1,
-                    max_displacement=10,
-                    stride=1,
-                    padding=0,
-                    dilation_patch=2),
-                scaled=False,
-                conv_cfg=None,
-                norm_cfg=None,
-                act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
-            )
+            # self.models["corr"] = networks.CorrEncoder(
+            #     in_channels=473,
+            #     pyramid_levels=['level3', 'level4', 'level5', 'level6'],
+            #     kernel_size=(3, 3, 3, 3),
+            #     num_convs=(1, 2, 2, 2),
+            #     out_channels=(256, 512, 512, 1024),
+            #     redir_in_channels=256,
+            #     redir_channels=32,
+            #     strides=(1, 2, 2, 2),
+            #     dilations=(1, 1, 1, 1),
+            #     corr_cfg=dict(
+            #         type='Correlation',
+            #         kernel_size=1,
+            #         max_displacement=10,
+            #         stride=1,
+            #         padding=0,
+            #         dilation_patch=2),
+            #     scaled=False,
+            #     conv_cfg=None,
+            #     norm_cfg=None,
+            #     act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
+            # )
+            self.models["corr"] = networks.corr_encoder.CorrEncoderSimple(levels=self.opt.all_corr_levels)
 
             self.models["corr"].to(self.device)
             self.parameters_to_train += list(self.models["corr"].parameters())
@@ -277,18 +292,6 @@ class Trainer:
         if not self.opt.no_ssim:
             self.ssim = SSIM()
             self.ssim.to(self.device)
-
-        self.backproject_depth = {}
-        self.project_3d = {}
-        for scale in self.opt.scales:
-            h = self.opt.height // (2 ** scale)
-            w = self.opt.width // (2 ** scale)
-
-            self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
-            self.backproject_depth[scale].to(self.device)
-
-            self.project_3d[scale] = Project3D(self.opt.batch_size, h, w)
-            self.project_3d[scale].to(self.device)
 
         self.depth_metric_names = [
             "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
@@ -398,10 +401,20 @@ class Trainer:
 
             if self.opt.depth_cv:
                 # using cost volume for depth prediction
-                corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
-                corr_next_curr = self.models["corr"](features[1][3], features[0][3]) # TODO: keep order or not??
+                ## use corr encoder
+                # corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
+                # corr_next_curr = self.models["corr"](features[1][3], features[0][3]) # TODO: keep order or not??
+                # outputs = self.models["depth"](features[0], corr_prev_curr, corr_next_curr)
 
-                outputs = self.models["depth"](features[0], corr_prev_curr, corr_next_curr)
+                ## use corr simple & multi corr
+                corrs = self.models["corr"](features)
+                outputs = self.models["depth"](features[0], corrs)
+                
+            elif self.opt.cv_reproj:
+                cp.cuda.Device(self.DEVICE_NUM).use()
+                # predict pose before depth
+                outputs = self.predict_poses(inputs, features)
+                outputs.update(self.models["depth"](features[0], inputs=inputs, outputs=outputs, adjacent_features={-1:features[-1],1:features[1]})) # only predict depth for current frame (monocular)
             else:
                 # normal
                 outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
@@ -413,7 +426,8 @@ class Trainer:
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)
 
-        if self.use_pose_net:
+        
+        if not self.opt.cv_reproj and self.use_pose_net: ## IF cv_reproj, apply before depth decoder 
             outputs.update(self.predict_poses(inputs, features))
 
         if self.opt.optical_flow in ["flownet",]:

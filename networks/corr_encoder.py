@@ -121,11 +121,23 @@ class CorrEncoderSimple(nn.Module):
                      padding=0,
                      dilation_patch=2),
                  scaled: bool = False,
-                 act_cfg: dict = dict(type='LeakyReLU', negative_slope=0.1)) -> None:
-
+                 act_cfg: dict = dict(type='LeakyReLU', negative_slope=0.1),
+                 levels=[0,1,2,3]) -> None:
+        super().__init__()
         self.corr = CorrBlock(corr_cfg, act_cfg, scaled=scaled)
+        self.levels = levels
 
-    def forward(self, f1, f2):
-        corr_feat = self.corr(f1, f2) # C=441, H3(=12), W3(=40)
+    def forward(self, features):
+        output = {}
+        for l in self.levels:
+            f_m1 = features[-1][l]
+            f_0 = features[0][l]
+            f_1 = features[1][l]
 
-        return corr_feat
+            # corr shape: B, C=441, H3(=12), W3(=40)
+            corr_prev_curr = self.corr(f_m1, f_0) 
+            corr_next_curr = self.corr(f_1, f_0)
+             
+            output[l] = torch.maximum(corr_prev_curr, corr_next_curr) # TODO: max / sum / concat
+
+        return output

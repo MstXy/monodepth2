@@ -94,6 +94,15 @@ class MonodepthOptions:
         self.parser.add_argument('--depth_cv',
                                  type=bool,
                                  help="use attention in depth decoder",
+                                 default=False)
+        self.parser.add_argument('--all_corr_levels',
+                                 nargs="+",
+                                 type=int,
+                                 help="coorelation levels used in depth decoder",
+                                 default=[3])
+        self.parser.add_argument('--cv_reproj',
+                                 type=bool,
+                                 help="use cost volume on warped image on computed depth",
                                  default=True)
         # ------------------------------------
         # prediction refine (coarse-to-fine) --------------------

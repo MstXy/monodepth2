@@ -17,6 +17,8 @@ import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 
+from layers import BackprojectDepth, Project3D, transformation_from_parameters
+
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
 
@@ -27,7 +29,8 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
 
-device_num = 0
+DEVICE_NUM = 0
+DEVICE = torch.device("cuda:{}".format(DEVICE_NUM))
 
 def compute_errors(gt, pred):
     """Computation of error metrics between predicted and ground truth depths
@@ -90,42 +93,53 @@ def evaluate(opt):
             print("using cost volume for depth")
             opt.depth_cv = True
             import cupy as cp
-            cp.cuda.Device(device_num).use()
-            corrEncoder = networks.CorrEncoder(
-                    in_channels=473,
-                    pyramid_levels=['level3', 'level4', 'level5', 'level6'],
-                    kernel_size=(3, 3, 3, 3),
-                    num_convs=(1, 2, 2, 2),
-                    out_channels=(256, 512, 512, 1024),
-                    redir_in_channels=256,
-                    redir_channels=32,
-                    strides=(1, 2, 2, 2),
-                    dilations=(1, 1, 1, 1),
-                    corr_cfg=dict(
-                        type='Correlation',
-                        kernel_size=1,
-                        max_displacement=10,
-                        stride=1,
-                        padding=0,
-                        dilation_patch=2),
-                    scaled=False,
-                    conv_cfg=None,
-                    norm_cfg=None,
-                    act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
-                )
+            cp.cuda.Device(DEVICE_NUM).use()
+            # corrEncoder = networks.CorrEncoder(
+            #         in_channels=473,
+            #         pyramid_levels=['level3', 'level4', 'level5', 'level6'],
+            #         kernel_size=(3, 3, 3, 3),
+            #         num_convs=(1, 2, 2, 2),
+            #         out_channels=(256, 512, 512, 1024),
+            #         redir_in_channels=256,
+            #         redir_channels=32,
+            #         strides=(1, 2, 2, 2),
+            #         dilations=(1, 1, 1, 1),
+            #         corr_cfg=dict(
+            #             type='Correlation',
+            #             kernel_size=1,
+            #             max_displacement=10,
+            #             stride=1,
+            #             padding=0,
+            #             dilation_patch=2),
+            #         scaled=False,
+            #         conv_cfg=None,
+            #         norm_cfg=None,
+            #         act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
+            #     )
+            ## all corrs
+            corrEncoder = networks.corr_encoder.CorrEncoderSimple(levels=[1,2,3])
             corr_path = os.path.join(opt.load_weights_folder, "corr.pth")
             corrEncoder.load_state_dict(torch.load(corr_path, map_location='cpu'))
-            corrEncoder.cuda(device="cuda:{}".format(device_num))
+            corrEncoder.cuda(device="cuda:{}".format(DEVICE_NUM))
             corrEncoder.eval()
         else:
             opt.depth_cv = False
 
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "repcv":
+            print("using reprojection cv")
+            opt.cv_reproj = True
+            import cupy as cp
+            cp.cuda.Device(DEVICE_NUM).use()
+        else:
+            opt.cv_reproj = False
+
+        BATCH_SIZE = 16
 
         dataset = datasets.KITTIRAWDataset(opt.data_path, filenames,
                                            encoder_dict['height'], encoder_dict['width'],
-                                           [0] if not opt.depth_cv else [0, -1, 1], 4, is_train=False, img_ext='.png')
-        dataloader = DataLoader(dataset, 16, shuffle=False, num_workers=opt.num_workers,
-                                pin_memory=True, drop_last=False)
+                                           [0] if (not opt.depth_cv and not opt.cv_reproj) else [0, -1, 1], 4, is_train=False, img_ext='.png')
+        dataloader = DataLoader(dataset, BATCH_SIZE, shuffle=False, num_workers=opt.num_workers,
+                                pin_memory=True, drop_last=True)
 
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
             print("using dilated ResNet")
@@ -199,7 +213,7 @@ def evaluate(opt):
                 
                 refiner_path = os.path.join(opt.load_weights_folder, "{}.pth".format(refiner_name))
                 refiner.load_state_dict(torch.load(refiner_path, map_location='cpu'))
-                refiner.cuda(device="cuda:{}".format(device_num))
+                refiner.cuda(device="cuda:{}".format(DEVICE_NUM))
                 refiner.eval()
 
             else:
@@ -223,7 +237,7 @@ def evaluate(opt):
                     afnb.load_state_dict(torch.load(afnb_path, map_location='cpu'))
                     apnb.load_state_dict(torch.load(apnb_path, map_location='cpu'))
                     refiner = nn.Sequential(afnb, apnb)
-                    refiner.cuda(device="cuda:{}".format(device_num))
+                    refiner.cuda(device="cuda:{}".format(DEVICE_NUM))
                     refiner.eval()
                 
                 if refiner_name == "asppatt":
@@ -240,21 +254,44 @@ def evaluate(opt):
                     aspp.load_state_dict(torch.load(aspp_path, map_location='cpu'))
                     att.load_state_dict(torch.load(att_path, map_location='cpu'))
                     refiner = nn.Sequential(aspp, att)
-                    refiner.cuda(device="cuda:{}".format(device_num))
+                    refiner.cuda(device="cuda:{}".format(DEVICE_NUM))
                     refiner.eval()
 
+        ## warping utils for reprojection
+        backproject_depth = {}
+        project_3d = {}
+        for scale in opt.scales:
+            h = 192 // (2 ** scale)
+            w = 640 // (2 ** scale)
+
+            backproject_depth[scale] = BackprojectDepth(BATCH_SIZE, h, w)
+            backproject_depth[scale].cuda(device="cuda:{}".format(DEVICE_NUM))
+
+            project_3d[scale] = Project3D(BATCH_SIZE, h, w)
+            project_3d[scale].cuda(device="cuda:{}".format(DEVICE_NUM))
 
 
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine) 
+        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
+                                              depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
+                                              corr_levels = [3], 
+                                              cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
         depth_decoder.load_state_dict(torch.load(decoder_path, map_location='cpu'))
 
-        encoder.cuda(device="cuda:{}".format(device_num))
+        encoder.cuda(device="cuda:{}".format(DEVICE_NUM))
         encoder.eval()
-        depth_decoder.cuda(device="cuda:{}".format(device_num))
+        depth_decoder.cuda(device="cuda:{}".format(DEVICE_NUM))
         depth_decoder.eval()
+
+        if opt.cv_reproj:
+            # use pose model
+            pose_decoder = networks.PoseDecoder(np.array([64, 64, 128, 256, 512]), 2)
+            pose_path = os.path.join(opt.load_weights_folder, "pose.pth")
+            pose_decoder.load_state_dict(torch.load(pose_path, map_location='cpu'))
+            pose_decoder.cuda(device="cuda:{}".format(DEVICE_NUM))
+            pose_decoder.eval()
 
         pred_disps = []
 
@@ -263,7 +300,11 @@ def evaluate(opt):
 
         with torch.no_grad():
             for data in dataloader:
-                input_color = data[("color", 0, 0)].cuda(device="cuda:{}".format(device_num))
+                for key, ipt in data.items():
+                    data[key] = ipt.to(DEVICE)
+
+
+                input_color = data[("color", 0, 0)]
 
                 if opt.post_process:
                     # Post-processed results require each image to have two forward passes
@@ -272,10 +313,53 @@ def evaluate(opt):
                 output = None
                 if not opt.eval_refiner:
                     if opt.depth_cv:
-                        x_1_m = encoder(data[("color", -1, 0)].cuda(device="cuda:{}".format(device_num)))
+                        x_1_m = encoder(data[("color", -1, 0)])
                         x_0 = encoder(input_color)
-                        x_1 = encoder(data[("color", 1, 0)].cuda(device="cuda:{}".format(device_num)))
-                        output = depth_decoder(x_0, corrEncoder(x_1_m[3], x_0[3]), corrEncoder(x_1[3], x_0[3]))
+                        x_1 = encoder(data[("color", 1, 0)])
+                        # output = depth_decoder(x_0, corrEncoder(x_1_m[3], x_0[3]), corrEncoder(x_1[3], x_0[3]))
+
+                        ## use corr simple & multi corr
+                        features = {}
+                        features[-1] = x_1_m
+                        features[0] = x_0
+                        features[1] = x_1
+                        corrs = corrEncoder(features)
+                        output = depth_decoder(x_0, corrs)
+                    
+                    elif opt.cv_reproj:
+                        x_1_m = encoder(data[("color", -1, 0)])
+                        x_0 = encoder(input_color)
+                        x_1 = encoder(data[("color", 1, 0)])
+
+                        features = {}
+                        features[-1] = x_1_m
+                        features[0] = x_0
+                        features[1] = x_1
+
+                        outputs = {}
+                        frame_ids = [0,1,-1]
+                        pose_feats = {f_i: features[f_i] for f_i in frame_ids}
+                        
+                        for f_i in frame_ids[1:]:
+                            if not isinstance(f_i, str): # not s_0, s_-1, s_1
+                                # To maintain ordering we always pass frames in temporal order
+                                if f_i < 0:
+                                    pose_inputs = [pose_feats[f_i], pose_feats[0]]
+                                else:
+                                    pose_inputs = [pose_feats[0], pose_feats[f_i]]
+
+                                axisangle, translation = pose_decoder(pose_inputs)
+
+                                outputs[("axisangle", 0, f_i)] = axisangle
+                                outputs[("translation", 0, f_i)] = translation
+
+                                # Invert the matrix if the frame id is negative
+                                outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
+                                    axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
+      
+                        output = depth_decoder(features[0], inputs=data, outputs=outputs, adjacent_features={-1:features[-1],1:features[1]}) # only predict depth for current frame (monocular)
+                        # output = depth_decoder(encoder(input_color))
+
                     else:
                         output = depth_decoder(encoder(input_color))
                 else:
@@ -400,6 +484,8 @@ def evaluate(opt):
 if __name__ == "__main__":
     options = MonodepthOptions()
     opts = options.parse()
-    # opts.eval_mono = True
-    # opts.load_weights_folder =  "~/tmp/depcv_m/models/weights_14"
+    DEBUG_FLAG = False
+    if DEBUG_FLAG:
+        opts.eval_mono = True
+        opts.load_weights_folder =  "~/tmp/repcv_a/models/weights_3"
     evaluate(opts)
