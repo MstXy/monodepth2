@@ -99,7 +99,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="coorelation levels used in depth decoder",
-                                 default=[3])
+                                 default=[4])
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",

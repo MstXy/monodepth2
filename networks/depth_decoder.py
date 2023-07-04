@@ -158,6 +158,9 @@ class DepthDecoder(nn.Module):
             #     self.convs[("pred_up", s)] = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=True) # upsample using deconv 
             self.convs[("dispconv", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
 
+        ## additional depth prediction on level 4
+        self.convs[("dispconv", 4)] = Conv3x3(self.num_ch_dec[4], self.num_output_channels)
+
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
 
@@ -202,16 +205,17 @@ class DepthDecoder(nn.Module):
                 f_1 = outputs[("color_f", 1, i+1)]
                 f_0 = input_features[i - 1]
 
-                f_m1 = upsample(f_m1)
-                f_1 = upsample(f_1)
+                # f_m1 = upsample(f_m1)
+                # f_1 = upsample(f_1)
+                ## instead, downsample f_0
 
                 corr_m1 = self.corrblock(f_0, f_m1)
                 corr_1 = self.corrblock(f_0, f_1)
 
-                cv = torch.maximum(corr_m1, corr_1)
-                
-                x += [cv]
+                # cv = torch.maximum(corr_m1, corr_1)
+                cv = (corr_m1 + corr_1) / (2 + 1e-7)
 
+                x += [cv]
 
             x = torch.cat(x, 1)
             
@@ -252,6 +256,14 @@ class DepthDecoder(nn.Module):
                 if self.cv_reproj:
                     outputs.update(self.outputs)
 
+            ## additional depth prediction on level 4
+            if i == 4:
+                tmp = self.convs[("dispconv", i)](x)
+                self.outputs[("c2f", i)] = tmp
+                self.outputs[("disp", i)] = self.sigmoid(tmp)
+                if self.cv_reproj:
+                    outputs.update(self.outputs)
+
         return self.outputs
 
 
@@ -261,10 +273,12 @@ class DepthDecoder(nn.Module):
         """
         disp = outputs[("disp", scale)]
 
+        disp = upsample(disp) # 24*80 -> 48*160
+
         # disp = F.interpolate(
         #     disp, [192, 640], mode="bilinear", align_corners=False)
         
-        source_scale = scale
+        source_scale = scale - 1
         # source_scale = 0
 
         _, depth = disp_to_depth(disp, 0.1, 100.0)

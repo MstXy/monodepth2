@@ -273,7 +273,7 @@ def evaluate(opt):
 
         depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
                                               depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
-                                              corr_levels = [3], 
+                                              corr_levels = [2], 
                                               cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
 
         model_dict = encoder.state_dict()
