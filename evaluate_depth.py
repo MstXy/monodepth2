@@ -29,7 +29,7 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
 
-DEVICE_NUM = 0
+DEVICE_NUM = 2
 DEVICE = torch.device("cuda:{}".format(DEVICE_NUM))
 
 def compute_errors(gt, pred):
@@ -273,7 +273,7 @@ def evaluate(opt):
 
         depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
                                               depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
-                                              corr_levels = [2], 
+                                              corr_levels = [3], 
                                               cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
 
         model_dict = encoder.state_dict()
@@ -292,6 +292,7 @@ def evaluate(opt):
             pose_decoder.load_state_dict(torch.load(pose_path, map_location='cpu'))
             pose_decoder.cuda(device="cuda:{}".format(DEVICE_NUM))
             pose_decoder.eval()
+            print("--- pose loaded")
 
         pred_disps = []
 
@@ -356,7 +357,8 @@ def evaluate(opt):
                                 # Invert the matrix if the frame id is negative
                                 outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
                                     axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
-      
+                                
+                        print("--- pose predicted")
                         output = depth_decoder(features[0], inputs=data, outputs=outputs, adjacent_features={-1:features[-1],1:features[1]}) # only predict depth for current frame (monocular)
                         # output = depth_decoder(encoder(input_color))
 
@@ -487,5 +489,5 @@ if __name__ == "__main__":
     DEBUG_FLAG = False
     if DEBUG_FLAG:
         opts.eval_mono = True
-        opts.load_weights_folder =  "~/tmp/repcv_a/models/weights_3"
+        opts.load_weights_folder =  "~/tmp/repcv_c/models/weights_14"
     evaluate(opts)

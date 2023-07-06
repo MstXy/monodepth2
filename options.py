@@ -99,7 +99,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="coorelation levels used in depth decoder",
-                                 default=[4])
+                                 default=[3])
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",
@@ -173,11 +173,11 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=15) # 20
+                                 default=20) # 20
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=10)
+                                 default=15)
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",

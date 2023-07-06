@@ -90,7 +90,9 @@ class DepthDecoder(nn.Module):
                 if self.use_skips:
                     num_ch_in += self.num_ch_enc[i - 1]
                 num_ch_mid = num_ch_in
-                num_ch_in += 441
+                # num_ch_in += 441
+                ## for attention like:
+                num_ch_in += self.num_ch_enc[i - 1]
                 self.convs[("cv_conv", i)] = ConvBlock(num_ch_in, num_ch_mid)
 
 
@@ -214,6 +216,13 @@ class DepthDecoder(nn.Module):
 
                 # cv = torch.maximum(corr_m1, corr_1)
                 cv = (corr_m1 + corr_1) / (2 + 1e-7)
+
+                ## attentin-like process
+                B, C, H, W = f_0.shape
+                cv = F.softmax(cv.view(B, 441, -1), dim=-1)
+                cv = torch.matmul(cv, f_0.view(B, C, -1).permute(0, 2, 1))
+                cv = cv.reshape(B,C,21,21)
+                cv = F.interpolate(cv, size=(H,W), mode="bilinear", align_corners=False)
 
                 x += [cv]
 
