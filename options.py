@@ -21,12 +21,12 @@ class MonodepthOptions:
                                  type=str,
                                  help="path to the training data",
                               #    default=os.path.join(file_dir, "kitti_data")
-                                 default="/home/zcy/data/win_id4_share/KITTI/raw/data/raw_dataset"
+                                 default="/mnt/km-nfs/ns100002-share/KITTI_raw"
                                  )
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp"))
+                                 default="/mnt/km-nfs/ns100002-share/zcy-exp/tmp")
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -94,16 +94,16 @@ class MonodepthOptions:
         self.parser.add_argument('--depth_cv',
                                  type=bool,
                                  help="use attention in depth decoder",
-                                 default=False)
+                                 default=True)
         self.parser.add_argument('--all_corr_levels',
                                  nargs="+",
                                  type=int,
                                  help="coorelation levels used in depth decoder",
-                                 default=[3])
+                                 default=[1, 2, 3])
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",
-                                 default=True)
+                                 default=False)
         # ------------------------------------
         # prediction refine (coarse-to-fine) --------------------
         self.parser.add_argument("--coarse2fine",

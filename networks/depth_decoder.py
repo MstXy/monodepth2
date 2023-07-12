@@ -84,20 +84,22 @@ class DepthDecoder(nn.Module):
                 self.convs[("att", i)] = CS_Block(num_ch_in)
                 # self.convs[("att", i)] = MultiHeadAttentionOne(n_head=1, d_model=num_ch_in, d_k=num_ch_in, d_v=num_ch_in)
             
-            # cv reproj
-            if self.cv_reproj and i + 1 in self.corr_levels:
-                num_ch_in = self.num_ch_dec[i]
-                if self.use_skips:
-                    num_ch_in += self.num_ch_enc[i - 1]
-                num_ch_mid = num_ch_in
-                # num_ch_in += 441
-                ## for attention like:
-                num_ch_in += self.num_ch_enc[i - 1]
-                self.convs[("cv_conv", i)] = ConvBlock(num_ch_in, num_ch_mid)
+
+            # # TODO: ensemble simple
+            # # cv reproj
+            # if self.cv_reproj and i + 1 in self.corr_levels:
+            #     num_ch_in = self.num_ch_dec[i]
+            #     if self.use_skips:
+            #         num_ch_in += self.num_ch_enc[i - 1]
+            #     num_ch_mid = num_ch_in
+            #     # num_ch_in += 441
+            #     ## for attention like:
+            #     num_ch_in += self.num_ch_enc[i - 1]
+            #     self.convs[("cv_conv", i)] = ConvBlock(num_ch_in, num_ch_mid)
 
 
             # depth cv
-            if self.depth_cv and i > 0:
+            # if self.depth_cv and i > 0:
             #     num_ch_in = self.num_ch_cv[i]
             #     num_ch_out = self.num_ch_enc[i - 1]
             #     self.convs[("cv_deconv", i)] = DeconvModule(in_channels=num_ch_in,
@@ -123,23 +125,34 @@ class DepthDecoder(nn.Module):
                 #                             )
 
                 # TODO: comment for corrs eval
+                # num_ch_in = self.num_ch_dec[i]
+                # if self.use_skips:
+                #     num_ch_in += self.num_ch_enc[i - 1]
+                # num_ch_mid = num_ch_in
+                # # num_ch_in += self.num_ch_enc[i - 1]
+                # if i-1 in self.corr_levels:
+                #     num_ch_in += self.num_ch_cv_out[i]
+                #     self.convs[("cv_conv", i, 0)] = nn.Sequential(
+                #                                     nn.Conv2d(self.num_ch_cv_in[i], self.num_ch_cv_out[i], 1),
+                #                                     nn.ReLU(inplace=True),
+                #                                     ConvBlock(self.num_ch_cv_out[i], self.num_ch_cv_out[i])
+                #                                     # ConvBlock(self.num_ch_cv_in[i], self.num_ch_cv_out[i])
+                #                                 )
+                #     self.convs[("cv_conv", i, 1)] = nn.Sequential(
+                #                                     ConvBlock(num_ch_in, num_ch_mid)
+                #                                     # ConvBlock(num_ch_mid, num_ch_mid)
+                #                                 )
+            
+            # for corrs concat
+            if self.depth_cv and i-1 in self.corr_levels:
                 num_ch_in = self.num_ch_dec[i]
                 if self.use_skips:
                     num_ch_in += self.num_ch_enc[i - 1]
-                num_ch_mid = num_ch_in
-                # num_ch_in += self.num_ch_enc[i - 1]
-                if i-1 in self.corr_levels:
-                    num_ch_in += self.num_ch_cv_out[i]
-                    self.convs[("cv_conv", i, 0)] = nn.Sequential(
-                                                    nn.Conv2d(self.num_ch_cv_in[i], self.num_ch_cv_out[i], 1),
-                                                    nn.ReLU(inplace=True),
-                                                    ConvBlock(self.num_ch_cv_out[i], self.num_ch_cv_out[i])
-                                                    # ConvBlock(self.num_ch_cv_in[i], self.num_ch_cv_out[i])
-                                                )
-                    self.convs[("cv_conv", i, 1)] = nn.Sequential(
-                                                    ConvBlock(num_ch_in, num_ch_mid)
-                                                    # ConvBlock(num_ch_mid, num_ch_mid)
-                                                )
+                num_ch_out = num_ch_in
+                num_ch_in += self.num_ch_enc[i - 1]
+                self.convs[("cv_conv", i)] = nn.Sequential(
+                                                ConvBlock(num_ch_in, num_ch_out)
+                                            )
 
             # upconv_1
             num_ch_in = self.num_ch_dec[i]
@@ -217,19 +230,36 @@ class DepthDecoder(nn.Module):
                 # cv = torch.maximum(corr_m1, corr_1)
                 cv = (corr_m1 + corr_1) / (2 + 1e-7)
 
-                ## attentin-like process
+                ## attention-like process
                 B, C, H, W = f_0.shape
                 cv = F.softmax(cv.view(B, 441, -1), dim=-1)
                 cv = torch.matmul(cv, f_0.view(B, C, -1).permute(0, 2, 1))
                 cv = cv.reshape(B,C,21,21)
                 cv = F.interpolate(cv, size=(H,W), mode="bilinear", align_corners=False)
 
+                # x += [cv]
+                weight = 0.6
+                x[-1] = x[-1] * weight + cv * (1-weight) ## TODO: ensemble simple
+
+            if self.depth_cv and i-1 in self.corr_levels:
+                f = x[-1]
+                B, C, H, W = f.shape
+                cv = corrs[i-1]
+                cv = F.softmax(cv.view(B, 441, -1), dim=-1)
+                cv = torch.matmul(cv, f.view(B, C, -1).permute(0, 2, 1))
+                cv = cv.reshape(B,C,21,21)
+                cv = F.interpolate(cv, size=(H,W), mode="bilinear", align_corners=False)
+                
+                # for corrs concat
                 x += [cv]
+                # weight = 0.6
+                # x[-1] = x[-1] * weight + cv * (1-weight) ## TODO: ensemble simple
 
             x = torch.cat(x, 1)
             
-            if self.cv_reproj and i + 1 in self.corr_levels:
-                x = self.convs[("cv_conv", i)](x)
+            # # TODO: ensemble simple
+            # if self.cv_reproj and i + 1 in self.corr_levels:
+            #     x = self.convs[("cv_conv", i)](x)
 
 
             # if self.depth_cv and i > 0:
@@ -243,15 +273,17 @@ class DepthDecoder(nn.Module):
             #     x = torch.cat([x, F.interpolate(corr, x.size()[-2:], mode="bilinear", align_corners=False)], dim=1)
             #     x = self.convs[("cv_conv", i)](x)
 
-            ## all corrs
+            # For corrs concat
+            # all corrs 
             if self.depth_cv and i-1 in self.corr_levels: # 4,3,2,1
-                # # TODO: uncomment for corrs eval
-                # x = torch.cat([x, corrs[i-1]], dim=1)
-                # x = self.convs[("cv_conv", i)](x)
+            #     # # TODO: uncomment for corrs eval
+            #     # x = torch.cat([x, corrs[i-1]], dim=1)
+                x = self.convs[("cv_conv", i)](x)
 
-                # TODO: comment for corrs eval
-                x = torch.cat([x, self.convs[("cv_conv", i, 0)](corrs[i-1])], dim=1)
-                x = self.convs[("cv_conv", i, 1)](x)
+            #     # TODO: comment for corrs eval
+            #     x = torch.cat([x, self.convs[("cv_conv", i, 0)](corrs[i-1])], dim=1)
+            #     x = self.convs[("cv_conv", i, 1)](x)
+
 
             if self.depth_att:
                 # apply self-attention

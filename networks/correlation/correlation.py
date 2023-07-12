@@ -397,3 +397,26 @@ class ModuleCorrelation(torch.nn.Module):
         return _FunctionCorrelation.apply(tenOne, tenTwo)
     # end
 # end
+
+
+if __name__ == "__main__":
+    import numpy as np
+    t1 = torch.ones((1,1,32,32)).cuda()
+    # t2 = torch.ones((1,2,2,2)).cuda()
+    # t2_np = np.array([[[[1., 1., 1.],
+    #                     [1., 1., 1.],
+    #                     [1., 1., 2.]],
+
+    #                    [[1., 1., 1.],
+    #                     [1., 1., 1.],
+    #                     [1., 1., 2.]]]])
+    # t2_np = np.array([[[[1., 1.],
+    #                 [1., 2.]],
+
+    #                 [[1., 1.],
+    #                 [1., 2.]]]])
+    # t2 = torch.from_numpy(t2_np).cuda()
+    t2 = torch.ones((1,1,32,32)).cuda()
+    t1[0][0][0][0] = 2
+    output = FunctionCorrelation(t1, t2)
+    print(output.shape)
