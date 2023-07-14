@@ -21,14 +21,14 @@ class MonodepthOptions:
                                  type=str,
                                  help="path to the training data",
                               #    default=os.path.join(file_dir, "kitti_data")
-                                 # default="/mnt/km-nfs/ns100002-share/KITTI_raw"
-                                 default="/home/zcy/data/win_id4_share/KITTI/raw/data/raw_dataset"
+                                 default="/mnt/km-nfs/ns100002-share/KITTI_raw"
+                                 # default="/home/zcy/data/win_id4_share/KITTI/raw/data/raw_dataset"
                                  )
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 # default="/mnt/km-nfs/ns100002-share/zcy-exp/tmp"
-                                 default=os.path.join(os.path.expanduser("~"), "tmp")
+                                 default="/mnt/km-nfs/ns100002-share/zcy-exp/tmp"
+                                 # default=os.path.join(os.path.expanduser("~"), "tmp")
                                  )
 
         # TRAINING options

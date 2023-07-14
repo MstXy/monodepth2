@@ -54,6 +54,9 @@ class DepthDecoder(nn.Module):
         # use cv on warp
         self.cv_reproj = cv_reproj
 
+        # decoder
+        self.convs = OrderedDict()
+
         if self.cv_reproj:
             self.backproject_depth = backproject_depth
             self.project_3d = project_3d
@@ -66,13 +69,11 @@ class DepthDecoder(nn.Module):
             #          dilation_patch=2),
             #         scaled = False,
             #         act_cfg = dict(type='LeakyReLU', negative_slope=0.1))
-            self.corrblocks = [None, None, None, None]
+            
             dims=[64,64,128,256,512]
             for i in self.corr_levels:
-                self.corrblocks[i] = MultiHeadAttention(n_head=n_head, d_model=dims[i-2], d_k=dims[i-2], d_v=dims[i-2])
+                self.convs[("corr", i)] = MultiHeadAttention(n_head=n_head, d_model=dims[i-2], d_k=dims[i-2], d_v=dims[i-2])
 
-        # decoder
-        self.convs = OrderedDict()
         for i in range(4, -1, -1):
             # upconv_0
             num_ch_in = self.num_ch_enc[-1] if i == 4 else self.num_ch_dec[i + 1]
@@ -181,8 +182,8 @@ class DepthDecoder(nn.Module):
                 # f_1 = upsample(f_1)
                 ## instead, downsample f_0
 
-                corr_m1 = self.corrblocks[i+1](q=f_0, k=f_m1, v=f_m1)
-                corr_1 = self.corrblocks[i+1](q=f_0, k=f_1, v=f_1)
+                corr_m1 = self.convs[("corr", i+1)](q=f_0, k=f_m1, v=f_m1)
+                corr_1 = self.convs[("corr", i+1)](q=f_0, k=f_1, v=f_1)
 
                 # cv = torch.maximum(corr_m1, corr_1)
                 cv = (corr_m1 + corr_1) / (2 + 1e-7)
