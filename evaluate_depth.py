@@ -29,7 +29,7 @@ splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 # to convert our stereo predictions to real-world scale we multiply our depths by 5.4.
 STEREO_SCALE_FACTOR = 5.4
 
-DEVICE_NUM = 2
+DEVICE_NUM = 1
 DEVICE = torch.device("cuda:{}".format(DEVICE_NUM))
 
 def compute_errors(gt, pred):
@@ -273,7 +273,7 @@ def evaluate(opt):
 
         depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
                                               depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
-                                              corr_levels = [3], 
+                                              corr_levels = [2,3], n_head=opt.nhead,
                                               cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
 
         model_dict = encoder.state_dict()

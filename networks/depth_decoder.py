@@ -9,6 +9,7 @@ from __future__ import absolute_import, division, print_function
 import numpy as np
 import torch
 import torch.nn as nn
+import math
 
 from collections import OrderedDict
 from layers import *
@@ -18,7 +19,7 @@ from networks.utils.correlation_block import CorrBlock
 
 class DepthDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, inter_output=False, 
-                 drn=False, depth_att=False, depth_cv=False, depth_refine=False, corr_levels=[2,3], 
+                 drn=False, depth_att=False, depth_cv=False, depth_refine=False, corr_levels=[2,3], n_head=1,
                  cv_reproj=False, backproject_depth=None, project_3d=None):
         super(DepthDecoder, self).__init__()
 
@@ -56,15 +57,19 @@ class DepthDecoder(nn.Module):
         if self.cv_reproj:
             self.backproject_depth = backproject_depth
             self.project_3d = project_3d
-            self.corrblock = CorrBlock(corr_cfg = dict(
-                     type='Correlation',
-                     kernel_size=1,
-                     max_displacement=10,
-                     stride=1,
-                     padding=0,
-                     dilation_patch=2),
-                    scaled = False,
-                    act_cfg = dict(type='LeakyReLU', negative_slope=0.1))
+            # self.corrblock = CorrBlock(corr_cfg = dict(
+            #          type='Correlation',
+            #          kernel_size=1,
+            #          max_displacement=10,
+            #          stride=1,
+            #          padding=0,
+            #          dilation_patch=2),
+            #         scaled = False,
+            #         act_cfg = dict(type='LeakyReLU', negative_slope=0.1))
+            self.corrblocks = [None, None, None, None]
+            dims=[64,64,128,256,512]
+            for i in self.corr_levels:
+                self.corrblocks[i] = MultiHeadAttention(n_head=n_head, d_model=dims[i-2], d_k=dims[i-2], d_v=dims[i-2])
 
         # decoder
         self.convs = OrderedDict()
@@ -86,62 +91,14 @@ class DepthDecoder(nn.Module):
             
 
             # # TODO: ensemble simple
-            # # cv reproj
-            # if self.cv_reproj and i + 1 in self.corr_levels:
-            #     num_ch_in = self.num_ch_dec[i]
-            #     if self.use_skips:
-            #         num_ch_in += self.num_ch_enc[i - 1]
-            #     num_ch_mid = num_ch_in
-            #     # num_ch_in += 441
-            #     ## for attention like:
-            #     num_ch_in += self.num_ch_enc[i - 1]
-            #     self.convs[("cv_conv", i)] = ConvBlock(num_ch_in, num_ch_mid)
-
-
-            # depth cv
-            # if self.depth_cv and i > 0:
-            #     num_ch_in = self.num_ch_cv[i]
-            #     num_ch_out = self.num_ch_enc[i - 1]
-            #     self.convs[("cv_deconv", i)] = DeconvModule(in_channels=num_ch_in,
-            #                                                 out_channels=num_ch_out,
-            #                                                 kernel_size=4,
-            #                                                 stride=2,
-            #                                                 padding=1,
-            #                                                 bias=True,
-            #                                                 norm_cfg=None,
-            #                                                 act_cfg=dict(type='LeakyReLU', negative_slope=0.1))
-                # # TODO: uncomment for corrs eval
-                # num_ch_in = self.num_ch_dec[i]
-                # if self.use_skips:
-                #     num_ch_in += self.num_ch_enc[i - 1]
-                # num_ch_mid = num_ch_in
-                # # num_ch_in += self.num_ch_enc[i - 1]
-                # if i-1 in self.corr_levels:
-                #     num_ch_in += self.num_ch_cv[i]
-                # self.convs[("cv_conv", i)] = nn.Sequential(
-                #                                 nn.Conv2d(num_ch_in, num_ch_mid, 1), # 1*1 conv
-                #                                 ConvBlock(num_ch_mid, num_ch_mid)
-                #                                 # ConvBlock(num_ch_in, num_ch_mid)
-                #                             )
-
-                # TODO: comment for corrs eval
-                # num_ch_in = self.num_ch_dec[i]
-                # if self.use_skips:
-                #     num_ch_in += self.num_ch_enc[i - 1]
-                # num_ch_mid = num_ch_in
-                # # num_ch_in += self.num_ch_enc[i - 1]
-                # if i-1 in self.corr_levels:
-                #     num_ch_in += self.num_ch_cv_out[i]
-                #     self.convs[("cv_conv", i, 0)] = nn.Sequential(
-                #                                     nn.Conv2d(self.num_ch_cv_in[i], self.num_ch_cv_out[i], 1),
-                #                                     nn.ReLU(inplace=True),
-                #                                     ConvBlock(self.num_ch_cv_out[i], self.num_ch_cv_out[i])
-                #                                     # ConvBlock(self.num_ch_cv_in[i], self.num_ch_cv_out[i])
-                #                                 )
-                #     self.convs[("cv_conv", i, 1)] = nn.Sequential(
-                #                                     ConvBlock(num_ch_in, num_ch_mid)
-                #                                     # ConvBlock(num_ch_mid, num_ch_mid)
-                #                                 )
+            # cv reproj
+            if self.cv_reproj and i + 1 in self.corr_levels:
+                num_ch_in = self.num_ch_dec[i]
+                if self.use_skips:
+                    num_ch_in += self.num_ch_enc[i - 1]
+                num_ch_out = num_ch_in
+                num_ch_in += self.num_ch_enc[i - 1]
+                self.convs[("cv_conv", i)] = ConvBlock(num_ch_in, num_ch_out)
             
             # for corrs concat
             if self.depth_cv and i-1 in self.corr_levels:
@@ -224,32 +181,20 @@ class DepthDecoder(nn.Module):
                 # f_1 = upsample(f_1)
                 ## instead, downsample f_0
 
-                corr_m1 = self.corrblock(f_0, f_m1)
-                corr_1 = self.corrblock(f_0, f_1)
+                corr_m1 = self.corrblocks[i+1](q=f_0, k=f_m1, v=f_m1)
+                corr_1 = self.corrblocks[i+1](q=f_0, k=f_1, v=f_1)
 
                 # cv = torch.maximum(corr_m1, corr_1)
                 cv = (corr_m1 + corr_1) / (2 + 1e-7)
 
-                ## attention-like process
-                B, C, H, W = f_0.shape
-                cv = F.softmax(cv.view(B, 441, -1), dim=-1)
-                cv = torch.matmul(cv, f_0.view(B, C, -1).permute(0, 2, 1))
-                cv = cv.reshape(B,C,21,21)
-                cv = F.interpolate(cv, size=(H,W), mode="bilinear", align_corners=False)
-
-                # x += [cv]
-                weight = 0.6
-                x[-1] = x[-1] * weight + cv * (1-weight) ## TODO: ensemble simple
+                x += [cv]
+                # weight = 0.6
+                # x[-1] = x[-1] * weight + cv * (1-weight) ## TODO: ensemble simple
 
             if self.depth_cv and i-1 in self.corr_levels:
                 f = x[-1]
-                B, C, H, W = f.shape
                 cv = corrs[i-1]
-                cv = F.softmax(cv.view(B, 441, -1), dim=-1)
-                cv = torch.matmul(cv, f.view(B, C, -1).permute(0, 2, 1))
-                cv = cv.reshape(B,C,21,21)
-                cv = F.interpolate(cv, size=(H,W), mode="bilinear", align_corners=False)
-                
+                 
                 # for corrs concat
                 x += [cv]
                 # weight = 0.6
@@ -258,32 +203,13 @@ class DepthDecoder(nn.Module):
             x = torch.cat(x, 1)
             
             # # TODO: ensemble simple
-            # if self.cv_reproj and i + 1 in self.corr_levels:
-            #     x = self.convs[("cv_conv", i)](x)
-
-
-            # if self.depth_cv and i > 0:
-            #     # TODO: max / sum / concat
-            #     # corr = torch.cat([corr1, corr2], dim=1)
-            #     # corr = torch.maximum(corr1[i], corr2[i]) 
-
-            #     ## deconv
-            #     # corr = self.convs[("cv_deconv", i)](corr)
-                
-            #     x = torch.cat([x, F.interpolate(corr, x.size()[-2:], mode="bilinear", align_corners=False)], dim=1)
-            #     x = self.convs[("cv_conv", i)](x)
+            if self.cv_reproj and i + 1 in self.corr_levels:
+                x = self.convs[("cv_conv", i)](x)
 
             # For corrs concat
             # all corrs 
-            if self.depth_cv and i-1 in self.corr_levels: # 4,3,2,1
-            #     # # TODO: uncomment for corrs eval
-            #     # x = torch.cat([x, corrs[i-1]], dim=1)
+            if self.depth_cv and i - 1 in self.corr_levels: # 4,3,2,1
                 x = self.convs[("cv_conv", i)](x)
-
-            #     # TODO: comment for corrs eval
-            #     x = torch.cat([x, self.convs[("cv_conv", i, 0)](corrs[i-1])], dim=1)
-            #     x = self.convs[("cv_conv", i, 1)](x)
-
 
             if self.depth_att:
                 # apply self-attention

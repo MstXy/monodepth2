@@ -141,3 +141,31 @@ class CorrEncoderSimple(nn.Module):
             output[l] = torch.maximum(corr_prev_curr, corr_next_curr) # TODO: max / sum / concat
 
         return output
+    
+
+from networks.feature_refine.transformers import MultiHeadAttention
+
+class CorrEncoderAtt(nn.Module):
+    def __init__(self, levels=[0,1,2,3], n_head=1) -> None:
+        super().__init__()
+
+        self.levels = levels
+        self.corrs = [None, None, None, None]
+        dims = [64, 64, 128, 256, 512]
+        for i in self.levels:
+            self.corrs[i] = MultiHeadAttention(n_head=n_head, d_model=dims[i], d_k=dims[i], d_v=dims[i])
+
+    def forward(self, features):
+        output = {}
+        for l in self.levels:
+            f_m1 = features[-1][l]
+            f_0 = features[0][l]
+            f_1 = features[1][l]
+
+            corr_prev_curr = self.corrs[l](q=f_0, k=f_m1, v=f_m1) 
+            corr_next_curr = self.corrs[l](q=f_0, k=f_1, v=f_1)
+
+            # output[l] = torch.maximum(corr_prev_curr, corr_next_curr) # TODO: max / sum / concat
+            output[l] = (corr_prev_curr + corr_next_curr) / (2 + 1e-7)
+
+        return output

@@ -21,12 +21,15 @@ class MonodepthOptions:
                                  type=str,
                                  help="path to the training data",
                               #    default=os.path.join(file_dir, "kitti_data")
-                                 default="/mnt/km-nfs/ns100002-share/KITTI_raw"
+                                 # default="/mnt/km-nfs/ns100002-share/KITTI_raw"
+                                 default="/home/zcy/data/win_id4_share/KITTI/raw/data/raw_dataset"
                                  )
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default="/mnt/km-nfs/ns100002-share/zcy-exp/tmp")
+                                 # default="/mnt/km-nfs/ns100002-share/zcy-exp/tmp"
+                                 default=os.path.join(os.path.expanduser("~"), "tmp")
+                                 )
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -86,6 +89,12 @@ class MonodepthOptions:
                                  help="use dilated resnet as backbone",
                                  default=False)
         # -----------------------------
+        # heads for transformer -----------
+        self.parser.add_argument("--nhead",
+                                 type=int,
+                                 help="number of heads for transformers",
+                                 default=1)
+        # -----------------------------  
         # improved depth decoder -------------
         self.parser.add_argument('--depth_att',
                                  type=bool,
@@ -94,16 +103,16 @@ class MonodepthOptions:
         self.parser.add_argument('--depth_cv',
                                  type=bool,
                                  help="use attention in depth decoder",
-                                 default=True)
+                                 default=False)
         self.parser.add_argument('--all_corr_levels',
                                  nargs="+",
                                  type=int,
                                  help="coorelation levels used in depth decoder",
-                                 default=[1, 2, 3])
+                                 default=[2, 3])
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",
-                                 default=False)
+                                 default=True)
         # ------------------------------------
         # prediction refine (coarse-to-fine) --------------------
         self.parser.add_argument("--coarse2fine",

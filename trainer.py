@@ -42,7 +42,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 6 # change for # of GPU
+        self.DEVICE_NUM = 2 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
 
         self.num_scales = len(self.opt.scales)
@@ -137,7 +137,8 @@ class Trainer:
             self.parameters_to_train += list(self.models["apnb"].parameters())
 
         self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, corr_levels=self.opt.all_corr_levels,
+            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, 
+                corr_levels=self.opt.all_corr_levels, n_head=self.opt.nhead,
                 cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
@@ -201,7 +202,10 @@ class Trainer:
             #     norm_cfg=None,
             #     act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
             # )
-            self.models["corr"] = networks.corr_encoder.CorrEncoderSimple(levels=self.opt.all_corr_levels)
+            
+            # self.models["corr"] = networks.corr_encoder.CorrEncoderSimple(levels=self.opt.all_corr_levels)
+
+            self.models["corr"] = networks.corr_encoder.CorrEncoderAtt(levels=self.opt.all_corr_levels, n_head=self.opt.nhead)
 
             self.models["corr"].to(self.device)
             self.parameters_to_train += list(self.models["corr"].parameters())
