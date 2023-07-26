@@ -150,7 +150,7 @@ class CorrEncoderAtt(nn.Module):
         super().__init__()
 
         self.levels = levels
-        self.corrs = [None, None, None, None]
+        self.corrs = nn.ModuleList([None, None, None, None, None])
         dims = [64, 64, 128, 256, 512]
         for i in self.levels:
             self.corrs[i] = MultiHeadAttention(n_head=n_head, d_model=dims[i], d_k=dims[i], d_v=dims[i])
@@ -162,10 +162,21 @@ class CorrEncoderAtt(nn.Module):
             f_0 = features[0][l]
             f_1 = features[1][l]
 
-            corr_prev_curr = self.corrs[l](q=f_0, k=f_m1, v=f_m1) 
-            corr_next_curr = self.corrs[l](q=f_0, k=f_1, v=f_1)
+            corr_prev_curr,attn1 = self.corrs[l](q=f_0, k=f_m1, v=f_m1) 
+            corr_next_curr,attn2 = self.corrs[l](q=f_0, k=f_1, v=f_1)
 
             # output[l] = torch.maximum(corr_prev_curr, corr_next_curr) # TODO: max / sum / concat
             output[l] = (corr_prev_curr + corr_next_curr) / (2 + 1e-7)
+
+            # import matplotlib.pyplot as plt
+            # attn1 = attn1[0].reshape(12, 40, 12, 40) # H, W, H, W
+            # attn2 = attn2[0].reshape(12, 40, 12, 40) # H, W, H, W
+            # for i in range(0, attn1.shape[0], 4):
+            #     for j in range(0, attn1.shape[1], 4):
+            #         plt.imshow(attn1[i,j,:,:].unsqueeze(0).permute(1,2,0).cpu())
+            #         plt.savefig("att/attn1_{:02d}{:02d}.png".format(i,j))
+            #         plt.imshow(attn2[i,j,:,:].unsqueeze(0).permute(1,2,0).cpu())
+            #         plt.savefig("att/attn2_{:02d}{:02d}.png".format(i,j))
+            # print("saved. Now halt the program")
 
         return output

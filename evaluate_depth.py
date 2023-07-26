@@ -89,6 +89,7 @@ def evaluate(opt):
 
         encoder_dict = torch.load(encoder_path, map_location='cpu')
 
+        all_corr_levels = [3,4]
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depcv":
             print("using cost volume for depth")
             opt.depth_cv = True
@@ -117,7 +118,8 @@ def evaluate(opt):
             #         act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
             #     )
             ## all corrs
-            corrEncoder = networks.corr_encoder.CorrEncoderSimple(levels=[1,2,3])
+            # corrEncoder = networks.corr_encoder.CorrEncoderSimple(levels=[1,2,3])
+            corrEncoder = networks.corr_encoder.CorrEncoderAtt(levels=all_corr_levels, n_head=opt.nhead)
             corr_path = os.path.join(opt.load_weights_folder, "corr.pth")
             corrEncoder.load_state_dict(torch.load(corr_path, map_location='cpu'))
             corrEncoder.cuda(device="cuda:{}".format(DEVICE_NUM))
@@ -130,6 +132,12 @@ def evaluate(opt):
             opt.cv_reproj = True
             import cupy as cp
             cp.cuda.Device(DEVICE_NUM).use()
+
+            if opt.load_weights_folder.split("/")[-3].split("_")[1] == "c2f":
+                print("using coarse-2-fine")
+                opt.coarse2fine = True
+            else:
+                opt.coarse2fine = False
         else:
             opt.cv_reproj = False
 
@@ -273,7 +281,7 @@ def evaluate(opt):
 
         depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
                                               depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
-                                              corr_levels = [2,3], n_head=opt.nhead,
+                                              corr_levels = all_corr_levels, n_head=opt.nhead,
                                               cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
 
         model_dict = encoder.state_dict()
@@ -287,7 +295,19 @@ def evaluate(opt):
 
         if opt.cv_reproj:
             # use pose model
-            pose_decoder = networks.PoseDecoder(np.array([64, 64, 128, 256, 512]), 2)
+            if opt.pose_model_type == "separate_resnet":
+                pose_encoder = networks.ResnetEncoder(opt.num_layers, False, 2)
+                pose_encoder_path = os.path.join(opt.load_weights_folder, "pose_encoder.pth")
+                pose_model_dict = pose_encoder.state_dict()
+                pose_encoder_dict = torch.load(pose_encoder_path, map_location='cpu')
+                pose_encoder.load_state_dict({k: v for k, v in pose_encoder_dict.items() if k in pose_model_dict})
+                pose_encoder.cuda(device="cuda:{}".format(DEVICE_NUM))
+                pose_encoder.eval()
+                print("--- pose encoder loaded")
+                pose_decoder = networks.PoseDecoder(np.array([64, 64, 128, 256, 512]), num_input_features=1,
+                    num_frames_to_predict_for=2)
+            else:
+                pose_decoder = networks.PoseDecoder(np.array([64, 64, 128, 256, 512]), 2)
             pose_path = os.path.join(opt.load_weights_folder, "pose.pth")
             pose_decoder.load_state_dict(torch.load(pose_path, map_location='cpu'))
             pose_decoder.cuda(device="cuda:{}".format(DEVICE_NUM))
@@ -339,8 +359,11 @@ def evaluate(opt):
 
                         outputs = {}
                         frame_ids = [0,1,-1]
-                        pose_feats = {f_i: features[f_i] for f_i in frame_ids}
-                        
+                        if opt.pose_model_type == "shared":
+                            pose_feats = {f_i: features[f_i] for f_i in frame_ids}
+                        else:
+                            pose_feats = {f_i: data["color_aug", f_i, 0] for f_i in frame_ids}
+
                         for f_i in frame_ids[1:]:
                             if not isinstance(f_i, str): # not s_0, s_-1, s_1
                                 # To maintain ordering we always pass frames in temporal order
@@ -348,6 +371,9 @@ def evaluate(opt):
                                     pose_inputs = [pose_feats[f_i], pose_feats[0]]
                                 else:
                                     pose_inputs = [pose_feats[0], pose_feats[f_i]]
+
+                                if opt.pose_model_type == "separate_resnet":
+                                    pose_inputs = [pose_encoder(torch.cat(pose_inputs, 1))]
 
                                 axisangle, translation = pose_decoder(pose_inputs)
 
@@ -379,7 +405,6 @@ def evaluate(opt):
                     pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
 
                 pred_disps.append(pred_disp)
-
         pred_disps = np.concatenate(pred_disps)
 
     else:

@@ -42,7 +42,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 1 # change for # of GPU
+        self.DEVICE_NUM = 6 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
 
         self.num_scales = len(self.opt.scales)
@@ -423,9 +423,35 @@ class Trainer:
                 # normal
                 outputs = self.models["depth"](features[0]) # only predict depth for current frame (monocular)
         else:
-            # Otherwise, we only feed the image with frame_id 0 through the depth encoder
-            features = self.models["encoder"](inputs["color_aug", 0, 0])
-            outputs = self.models["depth"](features)
+            # If we are using a separate encoder for depth and pose, then all images are fed separately through the depth encoder.
+            all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids]) # all images: ([i-1, i, i+1] * [L, R])
+            all_features = self.models["encoder"](all_color_aug)
+            all_features = [torch.split(f, self.opt.batch_size) for f in all_features] # separate by frame
+
+            features = {}
+            for i, k in enumerate(self.opt.frame_ids):
+                features[k] = [f[i] for f in all_features]
+            if self.opt.depth_cv:
+                # using cost volume for depth prediction
+                ## use corr encoder
+                # corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
+                # corr_next_curr = self.models["corr"](features[1][3], features[0][3]) # TODO: keep order or not??
+                # outputs = self.models["depth"](features[0], corr_prev_curr, corr_next_curr)
+
+                ## use corr simple & multi corr
+                corrs = self.models["corr"](features)
+                outputs = self.models["depth"](features[0], corrs)
+                
+            elif self.opt.cv_reproj:
+                cp.cuda.Device(self.DEVICE_NUM).use()
+                # predict pose before depth
+                outputs = self.predict_poses(inputs, features)
+                outputs.update(self.models["depth"](features[0], inputs=inputs, outputs=outputs, adjacent_features={-1:features[-1],1:features[1]})) # only predict depth for current frame (monocular)
+            
+            else:
+                # Otherwise, we only feed the image with frame_id 0 through the depth encoder
+                features = self.models["encoder"](inputs["color_aug", 0, 0])
+                outputs = self.models["depth"](features)
 
         if self.opt.predictive_mask:
             outputs["predictive_mask"] = self.models["predictive_mask"](features)

@@ -108,7 +108,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="coorelation levels used in depth decoder",
-                                 default=[2, 3])
+                                 default=[3,4])
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",
@@ -217,8 +217,8 @@ class MonodepthOptions:
         self.parser.add_argument("--pose_model_type",
                                  type=str,
                                  help="normal or shared",
-                                 # default="separate_resnet",
-                                 default="shared",
+                                 default="separate_resnet",
+                                 # default="shared",
                                  choices=["posecnn", "separate_resnet", "shared"])
 
         # SYSTEM options
