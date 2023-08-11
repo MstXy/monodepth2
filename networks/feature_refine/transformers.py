@@ -46,7 +46,7 @@ class MultiHeadAttentionOne(nn.Module):
         nn.init.xavier_normal_(self.fc.weight)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, q, k=None, v=None, query_input=False):
+    def forward(self, q, k=None, v=None):
         H, W = q.size()[-2:]
         if not k and not v:
             q = q.view(q.size()[0], q.size()[1], -1)  # [bz, c, h, w]
@@ -121,36 +121,58 @@ class MultiHeadAttention(nn.Module):
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
 
 
-    def forward(self, q, k, v, mask=None):
+    def forward(self, q, k=None, v=None, mask=None):
         
         # q,k,v shape: B,C,H,W
         
         H, W = q.size()[-2:]
 
-        k = k.view(k.size()[0], k.size()[1], -1)  # [bz, c, h, w]
-        v = v.view(v.size()[0], v.size()[1], -1)  # [bz, c, h, w]
-        q = q.view(q.size()[0], q.size()[1], -1)  # [bz, c, h, w]
+        if not k and not v:
+            q = q.view(q.size()[0], q.size()[1], -1)  # [bz, c, h, w]
 
-        k = k.permute(0, 2, 1).contiguous()  # [bz, hw, c]
-        v = v.permute(0, 2, 1).contiguous()  # [bz, hw, c]
-        q = q.permute(0, 2, 1).contiguous()  # [bz, hw, c]
+            q = q.permute(0, 2, 1).contiguous()  # [bz, hw, c]
+
+            d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+            sz_b, len_q, _ = q.size()
+
+            residual = q
+            k,v = q,q
+            q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
+            k = self.w_ks(k).view(sz_b, len_q, n_head, d_k)
+            v = self.w_vs(v).view(sz_b, len_q, n_head, d_v)
+
+            q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k)  # [(n*b), lq, dk]
+            k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k)  # [(n*b), lk, dk]
+            v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_v)  # [(n*b), lv, dv]
+
+            output, attn, log_attn = self.attention(q, k, v)
+
+        else:
+
+            k = k.view(k.size()[0], k.size()[1], -1)  # [bz, c, h, w]
+            v = v.view(v.size()[0], v.size()[1], -1)  # [bz, c, h, w]
+            q = q.view(q.size()[0], q.size()[1], -1)  # [bz, c, h, w]
+
+            k = k.permute(0, 2, 1).contiguous()  # [bz, hw, c]
+            v = v.permute(0, 2, 1).contiguous()  # [bz, hw, c]
+            q = q.permute(0, 2, 1).contiguous()  # [bz, hw, c]
 
 
-        d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
-        sz_b, len_q, _ = q.size()
-        sz_b, len_k, _ = k.size()
-        sz_b, len_v, _ = v.size()
+            d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
+            sz_b, len_q, _ = q.size()
+            sz_b, len_k, _ = k.size()
+            sz_b, len_v, _ = v.size()
 
-        residual = q
-        q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
-        k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
-        v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
+            residual = q
+            q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
+            k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
+            v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
 
-        q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k)  # [(n*b), lq, dk]
-        k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k)  # [(n*b), lk, dk]
-        v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v)  # [(n*b), lv, dv]
+            q = q.permute(2, 0, 1, 3).contiguous().view(-1, len_q, d_k)  # [(n*b), lq, dk]
+            k = k.permute(2, 0, 1, 3).contiguous().view(-1, len_k, d_k)  # [(n*b), lk, dk]
+            v = v.permute(2, 0, 1, 3).contiguous().view(-1, len_v, d_v)  # [(n*b), lv, dv]
 
-        output, attn, log_attn = self.attention(q, k, v)
+            output, attn, log_attn = self.attention(q, k, v)
 
         output = output.view(n_head, sz_b, len_q, d_v)
         output = output.permute(1, 2, 0, 3).contiguous().view(sz_b, len_q, -1)  # [b, lq, (n*dv)]
@@ -160,7 +182,7 @@ class MultiHeadAttention(nn.Module):
 
         output = output.view(sz_b, -1, H, W) # B, C (d_model), H, W
 
-        return output, attn
+        return output
 
 
 class PositionwiseFeedForward(nn.Module):

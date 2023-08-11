@@ -23,7 +23,7 @@ from networks.utils.correlation_block import CorrBlock
 class DepthDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, inter_output=False, 
                  drn=False, depth_att=False, depth_cv=False, depth_refine=False, corr_levels=[2,3], n_head=1,
-                 cv_reproj=False, backproject_depth=None, project_3d=None):
+                 cv_reproj=False, backproject_depth=None, project_3d=None, mobile_backbone=None):
         super(DepthDecoder, self).__init__()
 
         self.num_output_channels = num_output_channels
@@ -31,10 +31,23 @@ class DepthDecoder(nn.Module):
         self.upsample_mode = 'nearest'
         self.scales = scales
 
+        self.LAST_LAYER_OUTPUT = False # layer 4, for corrs and corrs reprojection
+
         self.inter_output = inter_output
 
         self.num_ch_enc = num_ch_enc
-        self.num_ch_dec = np.array([16, 32, 64, 128, 256])
+        if mobile_backbone == "v3l":
+            self.num_ch_dec = np.array([8, 12, 20, 56, 80])
+        elif mobile_backbone == "v3s":
+            self.num_ch_dec = np.array([8, 8, 12, 24, 48])
+        elif mobile_backbone == "v2":
+            self.num_ch_dec = np.array([8,12,16,48,80]) # TODO: rm17
+        elif mobile_backbone == "vatt":
+            self.num_ch_dec = np.array([8, 8, 12, 24, 48])
+        elif mobile_backbone == "vatt2":
+            self.num_ch_dec = np.array([8,12,16,48,160])
+        else:
+            self.num_ch_dec = np.array([16, 32, 64, 128, 256])
 
         # self.num_ch_cv = np.array([None, 256, 512, 512, 1024])
         ## TODO: uncomment for corrs eval
@@ -140,10 +153,6 @@ class DepthDecoder(nn.Module):
             num_ch_in = self.num_ch_dec[i]
             if self.use_skips and i > 0:
                 num_ch_in += self.num_ch_enc[i - 1]
-                # #TODO: for eval nodeconv / deconv
-                # if self.depth_cv:
-                #     # num_ch_in += self.num_ch_enc[i - 1]
-                #     num_ch_in += self.num_ch_cv[i]
             # if self.depth_refine and i < 4:
             #     num_ch_in += 1
             num_ch_out = self.num_ch_dec[i]
@@ -155,20 +164,14 @@ class DepthDecoder(nn.Module):
                 self.convs[("pred_up", s)] = nn.ConvTranspose2d(1, 1, 4, 2, 1, bias=True) # upsample using deconv 
             self.convs[("dispconv", s)] = Conv3x3(self.num_ch_dec[s], self.num_output_channels)
 
-        ## additional depth prediction on level 4
-        self.convs[("dispconv", 4)] = Conv3x3(self.num_ch_dec[4], self.num_output_channels)
+        if self.LAST_LAYER_OUTPUT:
+            ## additional depth prediction on level 4
+            self.convs[("dispconv", 4)] = Conv3x3(self.num_ch_dec[4], self.num_output_channels)
 
         self.decoder = nn.ModuleList(list(self.convs.values()))
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, input_features, corrs=None, inputs=None, outputs=None, adjacent_features=None):
-        # # corr1/corr2: Dict type, {"level$#": Tensor, ...}
-        # if self.depth_cv:
-        #     assert corr1 is not None
-        #     assert corr2 is not None
-        #     # order of corr's is determined in trainer.py
-        #     corr1 = [None] + [v for v in corr1.values()]
-        #     corr2 = [None] + [v for v in corr2.values()]
 
         if self.cv_reproj:
             assert inputs is not None
@@ -281,9 +284,9 @@ class DepthDecoder(nn.Module):
                 self.outputs[("disp", i)] = self.sigmoid(tmp)
                 if self.cv_reproj:
                     outputs.update(self.outputs)
-
-            ## additional depth prediction on level 4
-            if i == 4:
+            
+            if self.LAST_LAYER_OUTPUT and i == 4:
+                ## additional depth prediction on level 4
                 tmp = self.convs[("dispconv", i)](x)
                 self.outputs[("c2f", i)] = tmp
                 self.outputs[("disp", i)] = self.sigmoid(tmp)

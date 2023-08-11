@@ -89,6 +89,13 @@ class MonodepthOptions:
                                  help="use dilated resnet as backbone",
                                  default=False)
         # -----------------------------
+        # backbone switch -----------
+        self.parser.add_argument("--encoder",
+                                 type=str,
+                                 help="alternative encoder choices",
+                                 default="mobilenetatt",
+                                 choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", "None"])
+        # -----------------------------
         # heads for transformer -----------
         self.parser.add_argument("--nhead",
                                  type=int,
@@ -112,7 +119,7 @@ class MonodepthOptions:
         self.parser.add_argument('--cv_reproj',
                                  type=bool,
                                  help="use cost volume on warped image on computed depth",
-                                 default=True)
+                                 default=False)
         # ------------------------------------
         # prediction refine (coarse-to-fine) --------------------
         self.parser.add_argument("--coarse2fine",

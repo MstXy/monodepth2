@@ -27,6 +27,7 @@ import datasets
 import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
+from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
 from IPython import embed
 
 
@@ -42,7 +43,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 6 # change for # of GPU
+        self.DEVICE_NUM = 5 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
 
         self.num_scales = len(self.opt.scales)
@@ -71,15 +72,37 @@ class Trainer:
 
             self.project_3d[scale] = Project3D(self.opt.batch_size, h, w)
             self.project_3d[scale].to(self.device)
-
-        # dilated ResNet?
-        if self.opt.drn:
-            # default to res18
-            self.models["encoder"] = dilated_resnet18(
-                self.opt.weights_init == "pretrained")
+        
+        if self.opt.encoder == "mobilenetv3-large":
+            print("using MobileNetV3-large as backbone")
+            self.models["encoder"] = MobileNetV3(model_type="large")
+            self.opt.mobile_backbone = "v3l"
+        elif self.opt.encoder == "mobilenetv3-small":
+            print("using MobileNetV3-small as backbone")
+            self.models["encoder"] = MobileNetV3(model_type="small")
+            self.opt.mobile_backbone = "v3s"
+        elif self.opt.encoder == "mobilenetv2":
+            print("using MobileNetV2 as backbone")
+            self.models["encoder"] = MobileNetV2()
+            self.opt.mobile_backbone = "v2"
+        elif self.opt.encoder == "mobilenetatt":
+            print("using MobileNet+Attention as backbone")
+            self.models["encoder"] = MobileNetAtt(self.opt.nhead)
+            self.opt.mobile_backbone = "vatt"
+        elif self.opt.encoder == "mobilenetatt2":
+            print("using MobileNet+Attention as backbone")
+            self.models["encoder"] = MobileNetAtt2(self.opt.nhead)
+            self.opt.mobile_backbone = "vatt2"
         else:
-            self.models["encoder"] = networks.ResnetEncoder(
-                self.opt.num_layers, self.opt.weights_init == "pretrained")
+            self.opt.mobile_backbone = None
+            # dilated ResNet?
+            if self.opt.drn:
+                # default to res18
+                self.models["encoder"] = dilated_resnet18(
+                    self.opt.weights_init == "pretrained")
+            else:
+                self.models["encoder"] = networks.ResnetEncoder(
+                    self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
 
@@ -139,7 +162,8 @@ class Trainer:
         self.models["depth"] = networks.DepthDecoder(
             self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, 
                 corr_levels=self.opt.all_corr_levels, n_head=self.opt.nhead,
-                cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,)
+                cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,
+                mobile_backbone=self.opt.mobile_backbone)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
@@ -257,6 +281,9 @@ class Trainer:
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
+
+        # log number of parameters
+        print(sum([sum(p.numel() for p in self.models[k].parameters() if p.requires_grad) for k in self.models.keys() if k in ["encoder", "depth"]]))
 
         # data
         datasets_dict = {"kitti": datasets.KITTIRAWDataset,

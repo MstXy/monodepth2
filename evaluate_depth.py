@@ -16,6 +16,7 @@ import networks
 
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
+from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
 
 from layers import BackprojectDepth, Project3D, transformation_from_parameters
 
@@ -89,7 +90,7 @@ def evaluate(opt):
 
         encoder_dict = torch.load(encoder_path, map_location='cpu')
 
-        all_corr_levels = [3,4]
+        all_corr_levels = [2,3,4]
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depcv":
             print("using cost volume for depth")
             opt.depth_cv = True
@@ -149,13 +150,38 @@ def evaluate(opt):
         dataloader = DataLoader(dataset, BATCH_SIZE, shuffle=False, num_workers=opt.num_workers,
                                 pin_memory=True, drop_last=True)
 
-        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
-            print("using dilated ResNet")
-            opt.drn = True
-            encoder = dilated_resnet18()
+        # alternate backbone
+        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "mb":
+            print("using mobilenetv3")
+            if opt.load_weights_folder.split("/")[-3].split("_")[1] == "3s":
+                print("using: Small")
+                encoder = MobileNetV3(model_type="small")
+                opt.mobile_backbone = "v3s"
+            elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "3l":
+                print("using: Large")
+                encoder = MobileNetV3(model_type="large")
+                opt.mobile_backbone = "v3l"
+            elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "2":
+                print("using: Large")
+                encoder = MobileNetV2()
+                opt.mobile_backbone = "v2"
+            elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "att":
+                print("using +Attention")
+                encoder = MobileNetAtt(opt.nhead)
+                opt.mobile_backbone = "vatt"
+            elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "att2":
+                print("using v2+Attention")
+                encoder = MobileNetAtt2(opt.nhead)
+                opt.mobile_backbone = "vatt2"
         else:
-            opt.drn = False
-            encoder = networks.ResnetEncoder(opt.num_layers, False)
+            opt.mobile_backbone = None
+            if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
+                print("using dilated ResNet")
+                opt.drn = True
+                encoder = dilated_resnet18()
+            else:
+                opt.drn = False
+                encoder = networks.ResnetEncoder(opt.num_layers, False)
         
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
             print("using depth attention")
@@ -282,7 +308,8 @@ def evaluate(opt):
         depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
                                               depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
                                               corr_levels = all_corr_levels, n_head=opt.nhead,
-                                              cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d) 
+                                              cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d,
+                                              mobile_backbone=opt.mobile_backbone) 
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})
