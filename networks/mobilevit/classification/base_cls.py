@@ -7,12 +7,12 @@ from torch import nn, Tensor
 from typing import Optional, Dict
 import argparse
 
-from utils import logger
+from networks.mobilevit.utils import logger
 
-from ... import parameter_list
-from ...layers import norm_layers_tuple
-from ...misc.profiler import module_profile
-from ...misc.init_utils import initialize_weights
+from ..misc.common import parameter_list
+from ..layers import norm_layers_tuple
+from ..misc.profiler import module_profile
+from ..misc.init_utils import initialize_weights
 
 
 class BaseEncoder(nn.Module):

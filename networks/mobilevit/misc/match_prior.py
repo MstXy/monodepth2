@@ -9,7 +9,7 @@ import numpy as np
 from typing import Optional, Union, Tuple
 
 from .third_party.ssd_utils import assign_priors
-from cvnets.misc.box_utils import (
+from misc.box_utils import (
     center_form_to_corner_form,
     corner_form_to_center_form,
     convert_boxes_to_locations

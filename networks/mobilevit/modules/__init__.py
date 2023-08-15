@@ -10,7 +10,7 @@ from .resnet import BasicResNetBlock, BottleneckResNetBlock
 from .aspp_block import ASPP
 from .transformer import TransformerEncoder
 from .ppm import PPM
-from .mobilevit_block import MobileViTBlock
+from .mobilevit_block import MobileViTv3Block
 from .feature_pyramid import FPModule
 from .ssd import SSDHead
 
@@ -24,7 +24,7 @@ __all__ = [
     'TransformerEncoder',
     'SqueezeExcitation',
     'PPM',
-    'MobileViTBlock',
+    'MobileViTv3Block',
     'FPModule',
     'SSDHead'
 ]

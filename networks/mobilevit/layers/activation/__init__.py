@@ -29,7 +29,7 @@ for file in os.listdir(act_dir):
             and (file.endswith(".py") or os.path.isdir(path))
     ):
         model_name = file[: file.find(".py")] if file.endswith(".py") else file
-        module = importlib.import_module("cvnets.layers.activation." + model_name)
+        module = importlib.import_module("networks.mobilevit.layers.activation." + model_name)
 
 
 def arguments_activation_fn(parser: argparse.ArgumentParser):
@@ -43,15 +43,15 @@ def arguments_activation_fn(parser: argparse.ArgumentParser):
 
 
 # import later to avoid circular loop
-from cvnets.layers.activation.gelu import GELU
-from cvnets.layers.activation.hard_sigmoid import Hardsigmoid
-from cvnets.layers.activation.hard_swish import Hardswish
-from cvnets.layers.activation.leaky_relu import LeakyReLU
-from cvnets.layers.activation.prelu import PReLU
-from cvnets.layers.activation.relu import ReLU
-from cvnets.layers.activation.relu6 import ReLU6
-from cvnets.layers.activation.sigmoid import Sigmoid
-from cvnets.layers.activation.swish import Swish
+from networks.mobilevit.layers.activation.gelu import GELU
+from networks.mobilevit.layers.activation.hard_sigmoid import Hardsigmoid
+from networks.mobilevit.layers.activation.hard_swish import Hardswish
+from networks.mobilevit.layers.activation.leaky_relu import LeakyReLU
+from networks.mobilevit.layers.activation.prelu import PReLU
+from networks.mobilevit.layers.activation.relu import ReLU
+from networks.mobilevit.layers.activation.relu6 import ReLU6
+from networks.mobilevit.layers.activation.sigmoid import Sigmoid
+from networks.mobilevit.layers.activation.swish import Swish
 
 
 __all__ = [

@@ -28,11 +28,12 @@ import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
+from networks.mobilevit.build_mobileViTv3 import MobileViT
 from IPython import embed
 
 
 class Trainer:
-    def __init__(self, options):
+    def __init__(self, options, parser=None):
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
@@ -93,6 +94,10 @@ class Trainer:
             print("using MobileNet+Attention as backbone")
             self.models["encoder"] = MobileNetAtt2(self.opt.nhead)
             self.opt.mobile_backbone = "vatt2"
+        elif self.opt.encoder == "mobilevitv3_xs":
+            print("using MobileViTv3_XS as backbone")
+            self.models["encoder"] = MobileViT(parser)
+            self.opt.mobile_backbone = "mbvitv3_xs"
         else:
             self.opt.mobile_backbone = None
             # dilated ResNet?

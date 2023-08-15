@@ -46,6 +46,8 @@ class DepthDecoder(nn.Module):
             self.num_ch_dec = np.array([8, 8, 12, 24, 48])
         elif mobile_backbone == "vatt2":
             self.num_ch_dec = np.array([8,12,16,48,160])
+        elif mobile_backbone == "mbvitv3_xs":
+            self.num_ch_dec = np.array([16,24,48,80,80])
         else:
             self.num_ch_dec = np.array([16, 32, 64, 128, 256])
 

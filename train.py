@@ -26,5 +26,5 @@ def set_seed(seed):
 set_seed(42)
 
 if __name__ == "__main__":
-    trainer = Trainer(opts)
+    trainer = Trainer(opts, parser=options.parser)
     trainer.train()

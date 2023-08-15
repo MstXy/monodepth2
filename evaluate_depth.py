@@ -17,6 +17,7 @@ import networks
 from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
+from networks.mobilevit.build_mobileViTv3 import MobileViT
 
 from layers import BackprojectDepth, Project3D, transformation_from_parameters
 
@@ -65,7 +66,7 @@ def batch_post_process_disparity(l_disp, r_disp):
     return r_mask * l_disp + l_mask * r_disp + (1.0 - l_mask - r_mask) * m_disp
 
 
-def evaluate(opt):
+def evaluate(opt, parser):
     """Evaluates a pretrained model using a specified test set
     """
     MIN_DEPTH = 1e-3
@@ -173,6 +174,10 @@ def evaluate(opt):
                 print("using v2+Attention")
                 encoder = MobileNetAtt2(opt.nhead)
                 opt.mobile_backbone = "vatt2"
+            elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "vitv3":
+                print("using mobileViT v3 xs")
+                encoder = MobileViT(parser, pretrained=False)
+                opt.mobile_backbone = "mbvitv3_xs"
         else:
             opt.mobile_backbone = None
             if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
@@ -542,4 +547,4 @@ if __name__ == "__main__":
     if DEBUG_FLAG:
         opts.eval_mono = True
         opts.load_weights_folder =  "~/tmp/repcv_c/models/weights_14"
-    evaluate(opts)
+    evaluate(opts, options.parser)

@@ -29,7 +29,7 @@ for file in os.listdir(norm_dir):
             and (file.endswith(".py") or os.path.isdir(path))
     ):
         model_name = file[: file.find(".py")] if file.endswith(".py") else file
-        module = importlib.import_module("cvnets.layers.normalization." + model_name)
+        module = importlib.import_module("networks.mobilevit.layers.normalization." + model_name)
 
 
 def arguments_norm_layers(parser: argparse.ArgumentParser):
@@ -53,11 +53,11 @@ def arguments_norm_layers(parser: argparse.ArgumentParser):
 
 
 # import here to avoid circular loop
-from cvnets.layers.normalization.batch_norm import BatchNorm2d, BatchNorm1d
-from cvnets.layers.normalization.group_norm import GroupNorm
-from cvnets.layers.normalization.instance_norm import InstanceNorm1d, InstanceNorm2d
-from cvnets.layers.normalization.sync_batch_norm import SyncBatchNorm
-from cvnets.layers.normalization.layer_norm import LayerNorm
+from networks.mobilevit.layers.normalization.batch_norm import BatchNorm2d, BatchNorm1d
+from networks.mobilevit.layers.normalization.group_norm import GroupNorm
+from networks.mobilevit.layers.normalization.instance_norm import InstanceNorm1d, InstanceNorm2d
+from networks.mobilevit.layers.normalization.sync_batch_norm import SyncBatchNorm
+from networks.mobilevit.layers.normalization.layer_norm import LayerNorm
 
 
 __all__ = [

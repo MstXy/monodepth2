@@ -59,7 +59,7 @@ def layer_specific_args(parser: argparse.ArgumentParser):
                 and (file.endswith(".py") or os.path.isdir(path))
         ):
             layer_name = file[: file.find(".py")] if file.endswith(".py") else file
-            module = importlib.import_module("cvnets.layers." + layer_name)
+            module = importlib.import_module("networks.mobilevit.layers." + layer_name)
             for name, cls in inspect.getmembers(module, inspect.isclass):
                 if issubclass(cls, BaseLayer) and name not in parsed_layers:
                     parser = cls.add_arguments(parser)
@@ -73,10 +73,10 @@ def arguments_nn_layers(parser: argparse.ArgumentParser):
     parser = layer_specific_args(parser)
 
     # activation and normalization arguments
-    from cvnets.layers.activation import arguments_activation_fn
+    from networks.mobilevit.layers.activation import arguments_activation_fn
     parser = arguments_activation_fn(parser)
 
-    from cvnets.layers.normalization import arguments_norm_layers
+    from networks.mobilevit.layers.normalization import arguments_norm_layers
     parser = arguments_norm_layers(parser)
 
     return parser

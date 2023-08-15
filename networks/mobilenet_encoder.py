@@ -118,10 +118,13 @@ class MobileNetAtt(nn.Module):
 
 class MobileNetAtt2(nn.Module):
 
-    def __init__(self, n_head=1) -> None:
+    def __init__(self, n_head=1, pretrained=True) -> None:
         super(MobileNetAtt2, self).__init__()
         
-        self.encoder = models.mobilenet_v2(models.MobileNet_V2_Weights) #mobile net
+        if pretrained: 
+            self.encoder = models.mobilenet_v2(models.MobileNet_V2_Weights) #mobile net
+        else:
+            self.encoder = models.mobilenet_v2()
 
         # self.att_1 = MultiHeadAttentionOne(n_head, 96,96,96) # d=96
         # self.att_2 = MultiHeadAttentionOne(n_head, 160,160,160) # d=160 # TODO: rm17

@@ -5,7 +5,7 @@
 
 import torch
 import os
-from utils import logger
+from networks.mobilevit.utils import logger
 
 
 def load_pretrained_model(model, wt_loc, is_master_node: bool = False):

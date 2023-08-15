@@ -8,12 +8,12 @@ import os
 import importlib
 import argparse
 
-from utils.download_utils import get_local_path
-from utils import logger
-from utils.common_utils import check_frozen_norm_layer
-from utils.ddp_utils import is_master
+from networks.mobilevit.utils.download_utils import get_local_path
+from networks.mobilevit.utils import logger
+from networks.mobilevit.utils.common_utils import check_frozen_norm_layer
+from networks.mobilevit.utils.ddp_utils import is_master
 
-from ...misc.common import load_pretrained_model
+from ..misc.common import load_pretrained_model
 
 CLS_MODEL_REGISTRY = {}
 
@@ -125,4 +125,4 @@ for file in os.listdir(models_dir):
             and (file.endswith(".py") or os.path.isdir(path))
     ):
         model_name = file[: file.find(".py")] if file.endswith(".py") else file
-        module = importlib.import_module("cvnets.models.classification." + model_name)
+        module = importlib.import_module("networks.mobilevit.classification." + model_name)

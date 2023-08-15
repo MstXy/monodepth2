@@ -6,7 +6,7 @@
 import torch
 from torch import nn, Tensor
 from typing import Optional
-from utils.math_utils import make_divisible
+from networks.mobilevit.utils.math_utils import make_divisible
 
 from ..layers import AdaptiveAvgPool2d, ConvLayer, get_activation_fn, LinearLayer
 from ..modules import BaseModule

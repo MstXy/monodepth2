@@ -3,9 +3,9 @@
 # Copyright (C) 2020 Apple Inc. All Rights Reserved.
 #
 
-from cvnets.modules import BaseModule
+from networks.mobilevit.modules import BaseModule
 from torch import nn, Tensor
-from utils.math_utils import make_divisible
+from networks.mobilevit.utils.math_utils import make_divisible
 from typing import Optional, Union
 
 from ..misc.profiler import module_profile

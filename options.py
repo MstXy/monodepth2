@@ -93,8 +93,10 @@ class MonodepthOptions:
         self.parser.add_argument("--encoder",
                                  type=str,
                                  help="alternative encoder choices",
-                                 default="mobilenetatt",
-                                 choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", "None"])
+                                 default="mobilevitv3_xs",
+                                 choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", 
+                                          "mobilevitv3_xs",
+                                          "None"])
         # -----------------------------
         # heads for transformer -----------
         self.parser.add_argument("--nhead",
