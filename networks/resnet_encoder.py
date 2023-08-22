@@ -70,6 +70,10 @@ class ResnetEncoder(nn.Module):
         super(ResnetEncoder, self).__init__()
 
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
+        if pretrained:
+            weights = models.ResNet18_Weights.DEFAULT
+        else:
+            weights = None
 
         resnets = {18: models.resnet18,
                    34: models.resnet34,
@@ -83,7 +87,7 @@ class ResnetEncoder(nn.Module):
         if num_input_images > 1:
             self.encoder = resnet_multiimage_input(num_layers, pretrained, num_input_images)
         else:
-            self.encoder = resnets[num_layers](pretrained)
+            self.encoder = resnets[num_layers](weights)
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4

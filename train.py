@@ -13,5 +13,18 @@ opts = options.parse()
 
 
 if __name__ == "__main__":
-    trainer = Trainer(opts)
-    trainer.train()
+    if opts.ddp:
+        import os
+        import torch.multiprocessing as mp
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "29500"
+        world_size = 4
+        raise NotImplementedError
+        # mp.spawn(use_ddp,
+        #          args=(world_size, ),
+        #          nprocs=world_size,
+        #          join=True)
+    else:
+        trainer = Trainer(opts)
+        trainer.train()
+

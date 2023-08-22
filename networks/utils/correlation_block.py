@@ -2,13 +2,11 @@
 from math import sqrt
 
 import torch
-from mmcv.cnn import build_activation_layer
-from mmengine.model import BaseModule
-
+import torch.nn as nn
 from ..correlation import correlation
 
 
-class CorrBlock(BaseModule):
+class CorrBlock(nn.Module):
     """Basic Correlation Block.
 
     A block used to calculate correlation.
@@ -35,8 +33,9 @@ class CorrBlock(BaseModule):
             'scale_mode must be \'dimension\' or \'sqrt dimension\' '
             f'but got {scale_mode}')
 
-        # corr = build_operators(corr_cfg)
-        act = build_activation_layer(act_cfg)
+        if not act_cfg['type'] == 'LeakyReLU':
+            raise NotImplementedError
+        act = nn.LeakyReLU(negative_slope=act_cfg['negative_slope'])
         self.scaled = scaled
         self.scale_mode = scale_mode
 

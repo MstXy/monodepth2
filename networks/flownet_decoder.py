@@ -50,8 +50,8 @@ class DeconvModule(BaseModule):
 
         deconvs = []
 
-        if level == "level6":
-            stride = (1,2) # for the last dimension inconsistency of Kitti ( in the dimension of 192*640 )
+        # if level == "level6":
+        #     stride = (1,2) # for the last dimension inconsistency of Kitti ( in the dimension of 192*640 )
 
         deconvs.append(
             nn.ConvTranspose2d(
@@ -151,8 +151,10 @@ class BasicBlock(BaseModule):
                     bias=pred_bias)
             ]
             self.pred_out = nn.Sequential(*pred_out)
-        self.up_sample = out_channels is not None
+        self.up_sample = True
         if self.up_sample:
+            # dim of Deconv (TransposedConv2d)
+            # Size_out = stride * (Size_in -1) + kernel_size - 2 * padding
             self.deconv_out = DeconvModule(
                 in_channels=in_channels,
                 out_channels=out_channels,
@@ -170,8 +172,9 @@ class BasicBlock(BaseModule):
                 kernel_size=4,
                 stride=2,
                 padding=1,
-                bias=upsample_bias,
+                bias=True,
                 level=level)
+
 
     def forward(
             self, x: torch.Tensor
@@ -267,7 +270,7 @@ class FlowNetSDecoder(BaseDecoder):
                     in_channels=in_channels[level],
                     pred_channels=pred_channels,
                     inter_channels=inter_ch,
-                    out_channels=out_channels.get(level, None),
+                    out_channels=out_channels.get(level, 2),
                     deconv_bias=deconv_bias,
                     pred_bias=pred_bias,
                     upsample_bias=upsample_bias,
@@ -442,23 +445,24 @@ class FlowNetCDecoder(FlowNetSDecoder):
                 feat = corr_feat[level]
             else:
                 if corr_feat.get(level) is None:
-                    feat = torch.cat((feat1[level], upfeat, upflow), dim=1)
+                    feat = torch.cat((feat1['level1'], upfeat, upflow), dim=1)
                 else:
                     feat = torch.cat((corr_feat[level], upfeat, upflow), dim=1)
 
             flow, upflow, upfeat = self.decoders[level](feat)
+            # print('level',self.decoders[level])
+            flow_pred[level] = upflow
 
-            flow_pred[level] = flow
 
         #upsample flow to original size
         for level in self.flow_levels:
-            if level != self.start_level:
-                scale_factor = 196//flow_pred[level].shape[2]
+            if level != self.start_level and level=='level2': # TODO: use other layer outputs
+                scale_factor = 192//flow_pred[level].shape[2]
                 flow_pred[level+"_upsampled"] = F.interpolate(
                     flow_pred[level],
                     scale_factor=scale_factor,
                     mode='bilinear',
-                    align_corners=False) * 2.0
+                    align_corners=False)
                 flow_pred[level+"_upsampled"] = self.conv2(self.conv1(flow_pred[level+"_upsampled"]))
                 
         

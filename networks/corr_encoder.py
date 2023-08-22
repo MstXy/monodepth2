@@ -5,6 +5,23 @@ from mmcv.cnn.bricks.conv_module import ConvModule
 
 from .utils import BasicEncoder, CorrBlock
 
+class ConvModuleMy(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, act_cfg:dict):
+        super().__init__()
+        self.conv = torch.nn.Conv2d(in_channels, out_channels, kernel_size)
+        if act_cfg['type'] == 'LeakyReLU' or act_cfg['type'] == None:
+            self.act = torch.nn.LeakyReLU(act_cfg['negative_slope'])
+        else:
+            raise NotImplementedError("Activation type of {} not implemented".format(act_cfg))
+    def forward(self, x):
+        out = self.act(self.conv(x))
+        return out
+
+
+
+
+
+
 class CorrEncoder(BasicEncoder):
     """The Correlation feature extraction sub-module of FlowNetC..
 
@@ -77,11 +94,18 @@ class CorrEncoder(BasicEncoder):
 
         self.corr = CorrBlock(corr_cfg, act_cfg, scaled=scaled)
 
-        self.conv_redir = ConvModule(
+        # self.conv_redir = ConvModule(
+        #     in_channels=redir_in_channels,
+        #     out_channels=redir_channels,
+        #     kernel_size=1,
+        #     act_cfg=act_cfg)
+
+        self.conv_redir = ConvModuleMy(
             in_channels=redir_in_channels,
             out_channels=redir_channels,
             kernel_size=1,
             act_cfg=act_cfg)
+
 
     def forward(self, f1: torch.Tensor,
                 f2: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -97,6 +121,7 @@ class CorrEncoder(BasicEncoder):
 
         corr_feat = self.corr(f1, f2) # 441
         redir_feat = self.conv_redir(f1)
+        # redir_feat = self.conv_redir2(f1)
 
         x = torch.cat((redir_feat, corr_feat), dim=1)
 

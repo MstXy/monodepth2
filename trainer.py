@@ -6,18 +6,21 @@
 
 from __future__ import absolute_import, division, print_function
 
+import os.path
+
 import numpy as np
 import time
 
 import torch
 import torch.nn.functional as F
+import torch.nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 
 import json
 
-from utils import *
+from utils.utils import *
 from kitti_utils import *
 from layers import *
 
@@ -26,10 +29,51 @@ import networks
 from IPython import embed
 
 
+from PIL import Image
+import flow_vis
+import torchvision
+from datetime import datetime
+import torchvision.transforms as transforms
+from UPFlow_pytorch.utils.tools import tools as uptools
+import monodepth2.utils.utils as mono_utils
+
+corr_feature_level = 2
+
 class Trainer:
     def __init__(self, options):
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
+        self.val_data_root = self.opt.val_data_root
+
+        if self.opt.optical_flow in ["upflow",]:
+            from UPFlow_pytorch.model.upflow import UPFlow_net
+
+
+        ##<<<<<<<< for input augmentation and resize >>>>>>>>>>>>
+        self.num_scales = len(self.opt.scales)
+        self.to_tensor = transforms.ToTensor()
+        # We need to specify augmentations differently in newer versions of torchvision.
+        # We first try the newer tuple version; if this fails we fall back to scalars
+        try:
+            self.brightness = (0.8, 1.2)
+            self.contrast = (0.8, 1.2)
+            self.saturation = (0.8, 1.2)
+            self.hue = (-0.1, 0.1)
+            transforms.ColorJitter.get_params(
+                self.brightness, self.contrast, self.saturation, self.hue)
+        except TypeError:
+            self.brightness = 0.2
+            self.contrast = 0.2
+            self.saturation = 0.2
+            self.hue = 0.1
+        self.resize = {}
+        for i in range(self.num_scales):
+            s = 2 ** i
+            self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
+                                               # interpolation=Image.ANTIALIAS)
+        ##>>>>>>>>>>>>> for input augmentation and resize <<<<<<<<<<<<<<<<
+
+
 
         # checking height and width are multiples of 32
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
@@ -38,7 +82,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        self.device = torch.device("cpu" if self.opt.no_cuda else self.opt.device)
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -50,15 +94,15 @@ class Trainer:
 
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s_0")
-        
+
         if self.opt.full_stereo:
             self.opt.frame_ids += ["s_" + str(i) for i in self.opt.frame_ids]
 
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
+
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
-
 
         if self.opt.depth_branch:
             self.models["depth"] = networks.DepthDecoder(
@@ -91,16 +135,18 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
-        
+
         if self.opt.optical_flow in ["flownet",]:
             # TODO: dimesions change
+            feature_channels = [64, 164, 128, 256, 512]
+
             self.models["corr"] = networks.CorrEncoder(
                 in_channels=473,
                 pyramid_levels=['level3', 'level4', 'level5', 'level6'],
                 kernel_size=(3, 3, 3, 3),
                 num_convs=(1, 2, 2, 2),
                 out_channels=(256, 512, 512, 1024),
-                redir_in_channels=256,
+                redir_in_channels=feature_channels[corr_feature_level],
                 redir_channels=32,
                 strides=(1, 2, 2, 2),
                 dilations=(1, 1, 1, 1),
@@ -121,7 +167,7 @@ class Trainer:
             self.parameters_to_train += list(self.models["corr"].parameters())
             
             self.models["flow"] = networks.FlowNetCDecoder(in_channels=dict(
-                    level6=1024, level5=1026, level4=770, level3=386, level2=194),
+                    level6=1024, level5=1026, level4=770, level3=386, level2=130),
                 out_channels=dict(level6=512, level5=256, level4=128, level3=64),
                 deconv_bias=True,
                 pred_bias=True,
@@ -142,9 +188,44 @@ class Trainer:
             self.models["flow"].to(self.device)
             self.parameters_to_train += list(self.models["flow"].parameters())
 
-        if self.opt.debug:
-            # for debug, output shape explicitly
-            self.outputs_shape = {}
+        if self.opt.optical_flow in ["upflow",]:
+            self.upflow_param_dict = {
+                'occ_type': 'for_back_check',
+                'alpha_1': 0.1,
+                'alpha_2': 0.5,
+                'occ_check_obj_out_all': 'all',
+                'stop_occ_gradient': True,
+                'smooth_level': 'final',  # final or 1/4
+                'smooth_type': 'edge',  # edge or delta
+                'smooth_order_1_weight': 1,
+                # smooth loss
+                'smooth_order_2_weight': 0,
+                # photo loss type add SSIM
+                'photo_loss_type': 'abs_robust',  # abs_robust, charbonnier,L1, SSIM
+                'photo_loss_delta': 0.4,
+                'photo_loss_use_occ': True,
+                'photo_loss_census_weight': 1,
+                # use cost volume norm
+                'if_norm_before_cost_volume': True,
+                'norm_moments_across_channels': False,
+                'norm_moments_across_images': False,
+                'multi_scale_distillation_weight': 1,
+                'multi_scale_distillation_style': 'upup',
+                'multi_scale_photo_weight': 1,  # 'down', 'upup', 'updown'
+                'multi_scale_distillation_occ': True,  # if consider occlusion mask in multiscale distilation
+                'if_froze_pwc': False,
+                'input_or_sp_input': 1,
+                'if_use_boundary_warp': True,
+                'if_sgu_upsample': False,  # if use sgu upsampling
+                'if_use_cor_pytorch': True,
+            }
+
+            net_conf = UPFlow_net.config()
+            net_conf.update(self.upflow_param_dict)
+            net_conf.get_name(print_now=True)
+            self.models['upflow'] = net_conf()
+            self.models["upflow"].to(self.device)
+            self.parameters_to_train += list(self.models["upflow"].parameters())
 
         if self.opt.predictive_mask:
             assert self.opt.disable_automasking, \
@@ -159,8 +240,9 @@ class Trainer:
             self.parameters_to_train += list(self.models["predictive_mask"].parameters())
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
+
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+            self.model_optimizer, self.opt.scheduler_step_size, 0.4)
 
         if self.opt.load_weights_folder is not None:
             self.load_model()
@@ -186,18 +268,22 @@ class Trainer:
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
+
+
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True, img_ext=img_ext)
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
+            num_workers=self.opt.num_workers, pin_memory=False, drop_last=True,
+            sampler=(torch.utils.data.distributed.DistributedSampler(train_dataset) if self.opt.ddp else None))
+
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
-            num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
+            num_workers=self.opt.num_workers, pin_memory=False, drop_last=True)
         self.val_iter = iter(self.val_loader)
 
         self.writers = {}
@@ -229,6 +315,13 @@ class Trainer:
 
         self.save_opts()
 
+
+        # ==== loss, occ check
+        # self.occ_check_model = uptools.occ_check_model(occ_type=self.upflow_param_dict['occ_type'],
+        #                                                occ_alpha_1=self.upflow_param_dict['alpha_1'],
+        #                                                occ_alpha_2=self.upflow_param_dict['alpha_2'],
+        #                                                obj_out_all=self.upflow_param_dict['occ_check_obj_out_all'])
+
     def set_train(self):
         """Convert all models to training mode
         """
@@ -247,10 +340,35 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.start_time = time.time()
+        # self.load_model()
         for self.epoch in range(self.opt.num_epochs):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
+
+    def preprocess(self, inputs):
+        color_aug = transforms.ColorJitter(
+            self.brightness, self.contrast, self.saturation, self.hue)
+        """Resize colour images to the required scales and augment if required
+
+                We create the color_aug object in advance and apply the same augmentation to all
+                images in this item. This ensures that all images input to the pose network receive the
+                same augmentation.
+                """
+
+        for k in list(inputs):
+            frame = inputs[k]
+            if "color" in k:
+                n, im, _ = k
+                for i in range(1, self.num_scales):
+                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
+
+        for k in list(inputs):
+            f = inputs[k]
+            if "color" in k:
+                n, im, i = k
+                # inputs[(n, im, i)] = (self.to_tensor(f))
+                inputs[(n + "_aug", im, i)] = color_aug(f)
 
     def run_epoch(self):
         """Run a single epoch of training and validation
@@ -260,23 +378,47 @@ class Trainer:
         print("Training")
         self.set_train()
 
-        for batch_idx, inputs in enumerate(self.train_loader):
+        end_time = time.time()
+        data_loading_time_consumption = 0
+        forward_inference_time_consumption = 0
+        backword_time_consumption = 0
 
+        print_time = False
+        for batch_idx, inputs in enumerate(self.train_loader):
             before_op_time = time.time()
+            if print_time:
+                print('==============================================self.step:', self.step)
+                print("data loading time consumption :{}".format(before_op_time - end_time))
+                data_loading_time_consumption += before_op_time - end_time
+
 
             outputs, losses = self.process_batch(inputs)
+
+            if print_time:
+                inference_time = time.time()
+                print("Forward inference time consumption :{}".format(inference_time - before_op_time))
+                forward_inference_time_consumption += inference_time - before_op_time
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
             self.model_optimizer.step()
 
-            duration = time.time() - before_op_time
+            end_time = time.time()
+            duration = end_time - before_op_time
+            if print_time:
+                print("Backword time consumption: {}".format(end_time - inference_time))
+                backword_time_consumption += end_time - inference_time
 
             # log less frequently after the first 2000 steps to save time & disk space
-            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000
-            late_phase = self.step % 2000 == 0
+            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000 and not self.opt.debug
+            late_phase = self.step % 2000 == 0 and not self.opt.debug
 
             if early_phase or late_phase:
+                if print_time:
+                    print('\n', data_loading_time_consumption, forward_inference_time_consumption, backword_time_consumption, '\n')
+                    data_loading_time_consumption = 0
+                    forward_inference_time_consumption = 0
+                    backword_time_consumption = 0
                 self.log_time(batch_idx, duration, losses["loss"].cpu().data)
 
                 if "depth_gt" in inputs and self.opt.depth_branch:
@@ -284,6 +426,9 @@ class Trainer:
 
                 self.log("train", inputs, outputs, losses)
                 self.val()
+
+            if (self.step+1) % 1000 == 0 and self.opt.optical_flow:
+                self.kitti_val_result = self.val_flow()
 
             self.step += 1
         
@@ -296,13 +441,18 @@ class Trainer:
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
+        self.preprocess(inputs)
+        
+        # for k, v in self.models.items():
+        #     self.models[k] = torch.nn.DataParallel(v, device_ids=list(range(torch.cuda.device_count())))
+
         if self.opt.pose_model_type == "shared":
             # If we are using a shared encoder for both depth and pose (as advocated
             # in monodepthv1), then all images are fed separately through the depth encoder.
+
             all_color_aug = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids]) # all images: ([i-1, i, i+1] * [L, R])
             all_features = self.models["encoder"](all_color_aug)
             all_features = [torch.split(f, self.opt.batch_size) for f in all_features] # separate by frame
-
             features = {}
             
             for i, k in enumerate(self.opt.frame_ids):
@@ -324,22 +474,12 @@ class Trainer:
 
         if self.opt.optical_flow in ["flownet",]:
             outputs.update(self.predict_flow(features))
+        
+        if self.opt.optical_flow in ["upflow",]:
+            outputs.update(self.predict_upflow(features, inputs))
  
         self.generate_images_pred(inputs, outputs)
-        
-        if self.opt.debug:
-            # for debug, output shape explicitly
-            for k, v in outputs.items():
-                if k=='flow':
-                    # TODO: automatic type discrimination
-                    for l1 in range(len(v)):
-                        tmp = {}
-                        for k_l2,v_l2 in v[l1].items():
-                            tmp[k_l2] = v_l2.shape
-                            
-                        self.outputs_shape[k+"_"+str(l1)] = tmp
-                else:
-                    self.outputs_shape[k] = v.shape
+
         
         losses = self.compute_losses(inputs, outputs)
         return outputs, losses
@@ -401,24 +541,70 @@ class Trainer:
                         axisangle[:, i], translation[:, i])
 
         return outputs
-    
+
+    def show_tensor(self, input_tensor):
+        """
+        Args:
+            input_tensor: CHW
+        Returns:
+
+        """
+        assert len(input_tensor.shape) == 3
+        trans = torchvision.transforms.ToPILImage()
+        out = trans(input_tensor)
+        return out
+
+    def merge_images(self, image1, image2):
+        """Merge two images into one, displayed side by side
+        """
+        (width1, height1) = image1.size
+        (width2, height2) = image2.size
+
+        result_width = max(width1, width2)
+        result_height = height1+height2
+
+        result = Image.new('RGB', (result_width, result_height))
+        result.paste(im=image1, box=(0, 0))
+        result.paste(im=image2, box=(0, height1))
+        return result
+
+    def predict_upflow(self, features, inputs):
+
+        start = np.zeros((1, 2, 1, 1))
+        start = torch.from_numpy(start).float().to(self.device)
+
+        input_dict_pre_curr = {'x1_features': features[-1], 'x2_features': features[0],
+                               'im1': inputs[("color_aug", -1, 0)], 'im2': inputs[("color_aug", 0, 0)],
+                               'im1_raw': inputs[("color_aug", -1, 0)], 'im2_raw': inputs[("color_aug", 0, 0)],
+                               'im1_sp': inputs[("color_aug", -1, 0)], 'im2_sp': inputs[("color_aug", 0, 0)],
+                               'start': start, 'if_loss': False, 'if_shared_features': True}
+        
+        input_dict_curr_next = {'x1_features': features[0], 'x2_features': features[1],
+                                'im1': inputs[("color_aug", 0, 0)], 'im2': inputs[("color_aug", 1, 0)],
+                                'im1_raw': inputs[("color_aug", 0, 0)], 'im2_raw': inputs[("color_aug", 1, 0)],
+                                'im1_sp': inputs[("color_aug", 0, 0)], 'im2_sp': inputs[("color_aug", 1, 0)],
+                                'start': start, 'if_loss': False, 'if_shared_features': True}
+        output_dict_pre_curr = self.models["upflow"](input_dict_pre_curr)
+        output_dict_curr_next = self.models["upflow"](input_dict_curr_next)
+
+        outputs = {}
+        outputs["flow"] = [output_dict_pre_curr['flow_f_out'], output_dict_curr_next['flow_f_out']]
+        # todo : add multi level flow output to calculate multilevel flow loss
+        return outputs
+
     def predict_flow(self, features):
         """Predict flow between ??.
         """
-        
         # TODO: multi image
-
         outputs = {}
-
         # print(type(features[-1])) # Python list
         # print(len(features[-1])) # 5
-        
+
         # use D=256, i.e., level=3
-        corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
-        corr_curr_next = self.models["corr"](features[0][3], features[1][3])
-        
-        
-        
+        corr_prev_curr = self.models["corr"](features[-1][corr_feature_level], features[0][corr_feature_level])  # mono view, for now
+        corr_curr_next = self.models["corr"](features[0][corr_feature_level], features[1][corr_feature_level])
+
+
         if self.opt.debug:
             # for debug; feature_dim explicitly
             feature_shape_list = []
@@ -431,14 +617,12 @@ class Trainer:
             for level in corr_prev_curr:
                 corr_shape[str(level)] = corr_prev_curr[level].shape
 
-
         mod_prev = {"level"+str(i) : features[-1][i] for i in range(1, len(features[-1]))}
         mod_curr = {"level"+str(i) : features[0][i] for i in range(1, len(features[0]))}
 
         flow_prev_curr = self.models["flow"](mod_prev, corr_prev_curr)
         flow_curr_next = self.models["flow"](mod_curr, corr_curr_next)
-        
-        outputs["flow"] = [flow_prev_curr, flow_curr_next]
+        outputs["flow"] = [flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled']]
 
         return outputs
 
@@ -463,61 +647,94 @@ class Trainer:
 
         self.set_train()
 
+    def val_flow(self):
+        save_path = os.path.join(self.opt.log_dir, 'flow_val')
+        os.makedirs(save_path, exist_ok=True)
+        self.set_eval()
+        t1 = time.time()
+        from datasets.flow_eval_datasets import KITTI as KITTI_flow_2015_dataset
+        trans = torchvision.transforms.Resize((self.opt.height, self.opt.width))
+        val_dataset = KITTI_flow_2015_dataset(split='training', root=self.val_data_root)
+        out_list, epe_list = [], []
+        for val_id in range(len(val_dataset)):
+            image1, image2, flow_gt, valid_gt = val_dataset[val_id]
+            image1 = image1[None].to(self.device)
+            image2 = image2[None].to(self.device)
+            padder = InputPadder(image1.shape, mode='kitti')
+            image1, image2 = padder.pad(image1, image2)
+            image1 = trans(image1)
+            image2 = trans(image2)
+            flow_gt = trans(flow_gt)
+            valid_gt = trans(valid_gt.unsqueeze(0))
+            valid_gt = valid_gt.squeeze()
+
+            # flow forward propagation:
+            all_color_aug = torch.cat((image1, image2, image1), )  # all images: ([i-1, i, i+1] * [L, R])
+            all_features = self.models["encoder"](all_color_aug)
+            all_features = [torch.split(f, 1) for f in all_features]  # separate by frame
+            features = {}
+            for i, k in enumerate(self.opt.frame_ids):
+                features[k] = [f[i] for f in all_features]
+
+            if self.opt.optical_flow in ["flownet", ]:
+                outdict = self.predict_flow(features)
+
+            if self.opt.optical_flow in ["upflow", ]:
+                imputs_dic = {
+                    ("color_aug", -1, 0): image1,
+                    ("color_aug", 0, 0): image2,
+                    ("color_aug", 1, 0): image1,
+                }
+                outdict = self.predict_upflow(features, imputs_dic)
+
+            out_flow = outdict['flow'][0].squeeze()
+            flow = out_flow.cpu()
+
+            ## flow vis for debug
+            if val_id % 10 == 0:
+                out_flow = flow_vis.flow_to_color(flow.permute(1, 2, 0).clone().detach().numpy(), convert_to_bgr=False)
+                gt_flow = flow_vis.flow_to_color(flow_gt.permute(1, 2, 0).clone().detach().numpy(), convert_to_bgr=False)
+                gt_flow = Image.fromarray(gt_flow)
+                out_flow = Image.fromarray(out_flow)
+                result = self.merge_images(gt_flow, out_flow)
+                path = os.path.join(save_path, datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '.jpg')
+                result.save(path)
+
+            epe = torch.sum((flow - flow_gt) ** 2, dim=0).sqrt()
+            mag = torch.sum(flow_gt ** 2, dim=0).sqrt()
+            epe = epe.view(-1)
+            mag = mag.view(-1)
+            val = valid_gt.view(-1) >= 0.5
+            val_num = torch.sum((1*val))
+            # def vis_val(val):
+            #     val = (255 * val).numpy().reshape((192, 640))
+            #     val_vis = Image.fromarray(np.uint8(val))
+            #     val_vis.show()
+            # vis_val(val)
+
+            out = ((epe > 3.0) & ((epe / mag) > 0.05)).float()
+            epe_list.append(epe[val].mean().item())
+            out_list.append(out[val].cpu().numpy())
+
+        self.set_train()
+        epe_list = np.array(epe_list)
+        out_list = np.concatenate(out_list)
+        epe = np.mean(epe_list)
+        f1 = 100 * np.mean(out_list)
+
+        t2 = time.time()
+        print("Validation KITTI:  epe: %f,   f1: %f, time_spent: %f" % (epe, f1, t2-t1))
+        writer = self.writers['val']
+        writer.add_scalar("KITTI_epe", epe, self.step)
+        writer.add_scalar("KITTI_f1", f1, self.step)
+
+        return {'kitti_epe': epe, 'kitti_f1': f1}
+
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch.
         Generated images are saved into the `outputs` dictionary.
         """
-        if self.opt.optical_flow is not None:
-            # compute warped images by flow
-            for level_upsampled in outputs["flow"][0].keys():
-                if not "upsampled" in level_upsampled or 'level5' in level_upsampled:
-                    continue
-                if not "level2_upsampled" in level_upsampled:
-                    continue
-                flow_prev_curr = outputs["flow"][0][level_upsampled]
-                flow_curr_next = outputs["flow"][1][level_upsampled]
-                
-                
-                
-                # warp I_prev(inputs[('color', -1, 0)]) to curr_img_warped
-                # warp I_curr(inputs[('color', 0, 0)]) to next_img_warped
-
-                ## psudo:
-                ## I_curr[:, i+flow_prev_curr[i,j][0], j+flow_prev_curr[i,j][1]] = I_prev[:, i, j]
-                ## I_curr[:, i, j] = I_prev[:, i-flow_prev_curr[i,j][0], j-flow_prev_curr[i,j][1]]
-                curr_img_warped = np.zeros((self.opt.batch_size, 3, self.opt.width, self.opt.height))
-                next_img_warped = np.zeros((self.opt.batch_size, 3, self.opt.width, self.opt.height))
-                meshgrid = np.meshgrid(range(self.opt.width), range(self.opt.height), indexing='xy')
-                id_cordinates = torch.Tensor(np.stack(meshgrid, axis=0).astype(np.float32)).to(self.device)
-                end_point_corr_prev_curr = id_cordinates - flow_prev_curr
-                end_point_corr_curr_next = id_cordinates - flow_curr_next
-                
-                
-                curr_img_warped = F.grid_sample(inputs[('color', -1, 0)],
-                                                end_point_corr_prev_curr.permute(0, 2, 3, 1),
-                                                padding_mode="border",
-                                                align_corners=True)
-                
-                next_img_warped = F.grid_sample(inputs[('color', 0, 0)],
-                                                end_point_corr_curr_next.permute(0, 2, 3, 1),
-                                                padding_mode="border",
-                                                align_corners=True)
-                
-                # for x_cor in range(self.opt.width):
-                #     for y_cor in range(self.opt.height):
-                #         curr_img_warped[:, x_cor, y_cor] = inputs[('color', -1, 0)] \
-                #         [:, int(x_cor-flow_prev_curr[:, 0, x_cor, y_cor]), y_cor-int(flow_prev_curr[:, 1, x_cor, y_cor])]
-                        
-                #         next_img_warped[:, x_cor, y_cor] = inputs[('color', 0, 0)] \
-                #         [:, int(x_cor-flow_curr_next[:, 0, x_cor, y_cor]), int(y_cor-flow_curr_next[:, 1, x_cor, y_cor])]
-                
-                outputs[("warped_flow", 0, level_upsampled)] = curr_img_warped  #warped previous to current by flow
-                outputs[("warped_flow", 1, level_upsampled)] = next_img_warped  #warped previous to current by flow
-                
-            
-            
         if self.opt.depth_branch:
-
             # compute warped images by depth
             for scale in self.opt.scales:
                 disp = outputs[("disp", scale)]
@@ -568,20 +785,6 @@ class Trainer:
                         outputs[("color_identity", frame_id, scale)] = \
                             inputs[("color", frame_id, source_scale)]
 
-    def compute_reprojection_loss(self, pred, target):
-        """Computes reprojection loss between a batch of predicted and target images
-        """
-        abs_diff = torch.abs(target - pred)
-        l1_loss = abs_diff.mean(1, True)
-
-        if self.opt.no_ssim:
-            reprojection_loss = l1_loss
-        else:
-            ssim_loss = self.ssim(pred, target).mean(1, True)
-            reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
-
-        return reprojection_loss
-
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
         """
@@ -589,23 +792,46 @@ class Trainer:
         total_loss = 0
         flow_loss = 0
 
-        if self.opt.optical_flow is not None:
+
+
+
+        if self.opt.optical_flow:
+            ## ==== image warping using flow
+            flow_prev_curr = outputs["flow"][0]
+            flow_curr_next = outputs["flow"][1]
+            # todo: assume they are equal
+            if self.opt.optical_flow in ["upflow", ]:
+                prev_img_warped = uptools.torch_warp(inputs[("color_aug", 0, 0)],
+                                                     flow_prev_curr)  # warped im1 by forward flow and im2
+                curr_img_warped = uptools.torch_warp(inputs[("color_aug", 1, 0)], flow_curr_next)
+
+            elif self.opt.optical_flow in ["flownet", ]:
+                # warp I_curr(inputs[('color', -1, 0)]) to prev_img_warped
+                # warp I_next(inputs[('color', 0, 0)]) to curr_img_warped
+                ## psudo:
+                ## I_curr[:, i+flow_prev_curr[i,j][0], j+flow_prev_curr[i,j][1]] = I_prev[:, i, j]
+                prev_img_warped = mono_utils.torch_warp(img2=inputs[('color_aug', 0, 0)], flow=flow_prev_curr)
+                curr_img_warped = mono_utils.torch_warp(img2=inputs[('color_aug', 1, 0)], flow=flow_curr_next)
+
+            outputs[("warped_flow", -1, "level2_upsampled")] = prev_img_warped  # warped previous to current by flow
+            outputs[("warped_flow", 0, "level2_upsampled")] = curr_img_warped  # warped previous to current by flow
+
+
             ## compute flow losses
             for k, pred in outputs.items():
-                if 'warped_flow' in k and 0 in k:
-                    target = inputs[("color", 0, 0)]
-                elif 'warped_flow' in k and 1 in k:
-                    target = inputs[("color", 1, 0)]
+                if 'warped_flow' in k and -1 in k:
+                    target = inputs["color_aug", -1, 0]
+
+                elif 'warped_flow' in k and 0 in k:
+                    target = inputs[("color_aug", 0, 0)]
                 else:
                     continue
-                
-                l2_loss= torch.mean((pred - target)**2)
+                l1_loss = torch.mean(torch.abs(pred - target + 1e-6))
                 ssim_loss = torch.mean(self.ssim(pred, target))
-                flow_loss += 0.85 * ssim_loss + 0.15 * l2_loss
-
+                flow_loss += 0.85 * ssim_loss + 0.15 * l1_loss
             losses["flow_loss"] = flow_loss
             total_loss += flow_loss
-        
+
         
         if self.opt.depth_branch:
             for scale in self.opt.scales:
@@ -687,7 +913,7 @@ class Trainer:
 
                 loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
                 total_loss += loss
-                losses["loss/{}".format(scale)] = loss
+                losses["loss/scale_{}".format(scale)] = loss
 
         total_loss /= self.num_scales
         losses["loss"] = total_loss
@@ -695,7 +921,6 @@ class Trainer:
 
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
-
         This isn't particularly accurate as it averages over the entire batch,
         so is only used to give an indication of validation performance
         """
@@ -723,6 +948,101 @@ class Trainer:
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
+    def compute_reprojection_loss(self, pred, target):
+        """Computes reprojection loss between a batch of predicted and target images
+        """
+        abs_diff = torch.abs(target - pred)
+        l1_loss = abs_diff.mean(1, True)
+
+        if self.opt.no_ssim:
+            reprojection_loss = l1_loss
+        else:
+            ssim_loss = self.ssim(pred, target).mean(1, True)
+            reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
+
+        return reprojection_loss
+
+    def photo_loss_multi_type(self, x, y, occ_mask, photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
+                              photo_loss_delta=0.4, photo_loss_use_occ=False,
+                              ):
+        occ_weight = occ_mask
+        if photo_loss_type == 'abs_robust':
+            photo_diff = x - y
+            loss_diff = (torch.abs(photo_diff) + 0.01).pow(photo_loss_delta)
+        elif photo_loss_type == 'charbonnier':
+            photo_diff = x - y
+            loss_diff = ((photo_diff) ** 2 + 1e-6).pow(photo_loss_delta)
+        elif photo_loss_type == 'L1':
+            photo_diff = x - y
+            loss_diff = torch.abs(photo_diff + 1e-6)
+        elif photo_loss_type == 'SSIM':
+            loss_diff, occ_weight = self.weighted_ssim(x, y, occ_mask)
+        else:
+            raise ValueError('wrong photo_loss type: %s' % photo_loss_type)
+
+        if photo_loss_use_occ:
+            photo_loss = torch.sum(loss_diff * occ_weight) / (torch.sum(occ_weight) + 1e-6)
+        else:
+            photo_loss = torch.mean(loss_diff)
+        return photo_loss
+
+    def weighted_ssim(self, x, y, weight, c1=float('inf'), c2=9e-6, weight_epsilon=0.01):
+        """Computes a weighted structured image similarity measure.
+        Args:
+          x: a batch of images, of shape [B, C, H, W].
+          y:  a batch of images, of shape [B, C, H, W].
+          weight: shape [B, 1, H, W], representing the weight of each
+            pixel in both images when we come to calculate moments (means and
+            correlations). values are in [0,1]
+          c1: A floating point number, regularizes division by zero of the means.
+          c2: A floating point number, regularizes division by zero of the second
+            moments.
+          weight_epsilon: A floating point number, used to regularize division by the
+            weight.
+
+        Returns:
+          A tuple of two pytorch Tensors. First, of shape [B, C, H-2, W-2], is scalar
+          similarity loss per pixel per channel, and the second, of shape
+          [B, 1, H-2. W-2], is the average pooled `weight`. It is needed so that we
+          know how much to weigh each pixel in the first tensor. For example, if
+          `'weight` was very small in some area of the images, the first tensor will
+          still assign a loss to these pixels, but we shouldn't take the result too
+          seriously.
+        """
+
+        def _avg_pool3x3(x):
+            # tf kernel [b,h,w,c]
+            return F.avg_pool2d(x, (3, 3), (1, 1))
+            # return tf.nn.avg_pool(x, [1, 3, 3, 1], [1, 1, 1, 1], 'VALID')
+
+        if c1 == float('inf') and c2 == float('inf'):
+            raise ValueError('Both c1 and c2 are infinite, SSIM loss is zero. This is '
+                             'likely unintended.')
+        average_pooled_weight = _avg_pool3x3(weight)
+        weight_plus_epsilon = weight + weight_epsilon
+        inverse_average_pooled_weight = 1.0 / (average_pooled_weight + weight_epsilon)
+
+        def weighted_avg_pool3x3(z):
+            wighted_avg = _avg_pool3x3(z * weight_plus_epsilon)
+            return wighted_avg * inverse_average_pooled_weight
+
+        mu_x = weighted_avg_pool3x3(x)
+        mu_y = weighted_avg_pool3x3(y)
+        sigma_x = weighted_avg_pool3x3(x ** 2) - mu_x ** 2
+        sigma_y = weighted_avg_pool3x3(y ** 2) - mu_y ** 2
+        sigma_xy = weighted_avg_pool3x3(x * y) - mu_x * mu_y
+        if c1 == float('inf'):
+            ssim_n = (2 * sigma_xy + c2)
+            ssim_d = (sigma_x + sigma_y + c2)
+        elif c2 == float('inf'):
+            ssim_n = 2 * mu_x * mu_y + c1
+            ssim_d = mu_x ** 2 + mu_y ** 2 + c1
+        else:
+            ssim_n = (2 * mu_x * mu_y + c1) * (2 * sigma_xy + c2)
+            ssim_d = (mu_x ** 2 + mu_y ** 2 + c1) * (sigma_x + sigma_y + c2)
+        result = ssim_n / ssim_d
+        return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
+
     def log_time(self, batch_idx, duration, loss):
         """Print a logging statement to the terminal
         """
@@ -730,10 +1050,12 @@ class Trainer:
         time_sofar = time.time() - self.start_time
         training_time_left = (
             self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
+        curr_lr = self.model_optimizer.param_groups[0]['lr']
         print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-            " | loss: {:.5f} | time elapsed: {} | time left: {}"
+            " | loss: {:.5f} | time elapsed: {} | time left: {} | learning_rate: {}"
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
-                                  sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
+                                  sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left),
+                                  curr_lr))
 
     def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
@@ -744,11 +1066,16 @@ class Trainer:
 
         for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
             if self.opt.optical_flow is not None:
-
-                writer.add_image('flow_prev_curr', outputs['flow'][0]['level2_upsampled'][j], self.step)
-                writer.add_image('flow_curr_next', outputs['flow'][1]['level2_upsampled'][j], self.step)
+                flow_tmp = torch.from_numpy(
+                    flow_vis.flow_to_color(outputs['flow'][0][j].permute(1, 2, 0).clone().detach().cpu().numpy(),
+                                           convert_to_bgr=False)).permute(2, 0, 1)
+                writer.add_image('flow_prev_curr/{}'.format(j), flow_tmp, self.step)
+                flow_tmp = torch.from_numpy(
+                    flow_vis.flow_to_color(outputs['flow'][1][j].permute(1, 2, 0).clone().detach().cpu().numpy(),
+                                           convert_to_bgr=False)).permute(2, 0, 1)
+                writer.add_image('flow_curr_next/{}'.format(j), flow_tmp, self.step)
+                writer.add_image('prev_warped_by_flow', outputs[("warped_flow", -1, 'level2_upsampled')][j], self.step)
                 writer.add_image('curr_warped_by_flow', outputs[("warped_flow", 0, 'level2_upsampled')][j], self.step)
-                writer.add_image('next_warped_by_flow', outputs[("warped_flow", 1, 'level2_upsampled')][j], self.step)
             
             if self.opt.depth_branch:
                 for s in self.opt.scales:
@@ -835,3 +1162,4 @@ class Trainer:
             self.model_optimizer.load_state_dict(optimizer_dict)
         else:
             print("Cannot find Adam weights so Adam is randomly initialized")
+

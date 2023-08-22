@@ -8,6 +8,8 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import random
+import time
+
 import numpy as np
 import copy
 from PIL import Image  # using pillow-simd for increased speed
@@ -15,6 +17,11 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+opts = options.parse()
+
+
 
 
 def pil_loader(path):
@@ -48,6 +55,7 @@ class MonoDataset(data.Dataset):
                  is_train=False,
                  img_ext='.jpg'):
         super(MonoDataset, self).__init__()
+        self.device = opts.device
 
         self.data_path = data_path
         self.filenames = filenames
@@ -94,6 +102,7 @@ class MonoDataset(data.Dataset):
         images in this item. This ensures that all images input to the pose network receive the
         same augmentation.
         """
+
         for k in list(inputs):
             frame = inputs[k]
             if "color" in k:
@@ -101,11 +110,12 @@ class MonoDataset(data.Dataset):
                 for i in range(self.num_scales):
                     inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
 
+
         for k in list(inputs):
             f = inputs[k]
             if "color" in k:
                 n, im, i = k
-                inputs[(n, im, i)] = self.to_tensor(f)
+                inputs[(n, im, i)] = (self.to_tensor(f))
                 inputs[(n + "_aug", im, i)] = self.to_tensor(color_aug(f))
 
     def __len__(self):
@@ -135,6 +145,8 @@ class MonoDataset(data.Dataset):
             2       images resized to (self.width // 4, self.height // 4)
             3       images resized to (self.width // 8, self.height // 8)
         """
+
+
         inputs = {}
 
         do_color_aug = self.is_train and random.random() > 0.5
@@ -172,17 +184,27 @@ class MonoDataset(data.Dataset):
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
+        #
         if do_color_aug:
             color_aug = transforms.ColorJitter(
                 self.brightness, self.contrast, self.saturation, self.hue)
         else:
             color_aug = lambda x: x
 
-        self.preprocess(inputs, color_aug)
+        # self.preprocess(inputs, color_aug)
+        # for i in self.frame_idxs:
+        #     del inputs[("color", i, -1)]
+        #     del inputs[("color_aug", i, -1)]
 
-        for i in self.frame_idxs:
-            del inputs[("color", i, -1)]
-            del inputs[("color_aug", i, -1)]
+
+        for k in list(inputs):
+            if "color" in k:
+                n, im, i = k
+                inputs[(n, im, 0)] = self.resize[0](inputs[(n, im, -1)])
+                inputs[(n, im, 0)] = self.to_tensor(inputs[(n, im, 0)])
+                del inputs[("color", im, -1)]
+
+
 
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)

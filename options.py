@@ -12,6 +12,8 @@ from datetime import datetime
 
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
 
+def str2bool(stri_):
+    return True if stri_.lower() == 'true' else False
 
 class MonodepthOptions:
     def __init__(self):
@@ -22,18 +24,96 @@ class MonodepthOptions:
                                  type=str,
                                  help="path to the training data",
                                  # default=os.path.join(file_dir, "kitti_data")
-                                 default="/home/liu/data16t/datasets/raw/data/raw_dataset"
-                                 #default = "/home/wangshuo/Datasets/Self-driving/DIFINT_calibr/win_id4_share/KITTI/raw/data/raw_dataset"
+                                 default="/mnt/km-nfs/ns100002-share/KITTI_raw"
                                  )
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.path.expanduser("~"), "tmp", "monodepth_tb_log", datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
+                                 default=os.path.join("./log",
+                                                      datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
+        self.parser.add_argument("--val_data_root",
+                                 type=str,
+                                 help='flow valuation kitti dataset root dir',
+                                 default='/mnt/km-nfs/ns100002-share/data_scene_flow')
+        
+        
+        # LOADING options
+        self.parser.add_argument("--load_weights_folder",
+                                 type=str,
+                                 help="name of model to load",
+                                 # default="2023-06-21_21-14-49/mdp/models/weights_19")
+                                 default=None)
 
+        self.parser.add_argument("--models_to_load",
+                                 nargs="+",
+                                 type=str,
+                                 help="models to load",
+                                 default=["encoder", "depth", "pose", "corr", "flow"])
+
+
+        # ==== ddp settings
+        self.parser.add_argument("--ddp",
+                                 type=bool,
+                                 help='whether use ddp',
+                                 default=False)
+
+        self.parser.add_argument("--world_size",
+                                 type=int,
+                                 default=4)
+        # ==== training settings
+        self.parser.add_argument("--num_workers",
+                                 type=int,
+                                 help="number of dataloader workers",
+                                 default=15)
+        # ===== upflow settings
+        self.parser.add_argument("--photo_loss_use_occ",
+                                type=str2bool,
+                                default='false')
+        
+        
+        
+        # OPTIMIZATION options
+        self.parser.add_argument("--batch_size",
+                                 type=int,
+                                 help="batch size",
+                                 default=40)
+        self.parser.add_argument("--learning_rate",
+                                 type=float,
+                                 help="learning rate",
+                                 default=1e-4)
+        self.parser.add_argument("--num_epochs",
+                                 type=int,
+                                 help="number of epochs",
+                                 default=200)
+        self.parser.add_argument("--scheduler_step_size",
+                                 type=int,
+                                 help="step size of the scheduler",
+                                 default=15)
+
+        # optical flow branch ----------------
+        self.parser.add_argument("--optical_flow",
+                                 type=str,
+                                 help="optical flow model",
+                                 # default="upflow")
+                                #  default="flownet")
+                                 default=None)
+        
+        self.parser.add_argument("--flow_occ_check",
+                                 default=False,
+                                 type=bool)
+
+        self.parser.add_argument("--depth_branch",
+                                 type=str2bool,
+                                 help="predict depth or not",
+                                 default='False')
         # TRAINING options
         self.parser.add_argument("--debug",
                                  type=bool,
-                                 default=True)
+                                 default=False)
+        self.parser.add_argument("--device",
+                                 type=str,
+                                 default='cuda:0'
+                                 )
         self.parser.add_argument("--model_name",
                                  type=str,
                                  help="the name of the folder to save the model in",
@@ -89,16 +169,7 @@ class MonodepthOptions:
                                  help="if set, uses stereo pair for all adjacent frames (if any) in training",
                                  action="store_true")
         # ------------------------
-        # optical flow branch ----------------
-        self.parser.add_argument("--optical_flow",
-                                 type=str,
-                                 help="optical flow model",
-                                 default="flownet")
-        
-        self.parser.add_argument("--depth_branch",
-                        type=bool,
-                        help="predict depth or not",
-                        default=False)
+
         # ------------------------
 
         self.parser.add_argument("--frame_ids",
@@ -107,23 +178,7 @@ class MonodepthOptions:
                                  help="frames to load",
                                  default=[0, -1, 1])
 
-        # OPTIMIZATION options
-        self.parser.add_argument("--batch_size",
-                                 type=int,
-                                 help="batch size",
-                                 default=16)
-        self.parser.add_argument("--learning_rate",
-                                 type=float,
-                                 help="learning rate",
-                                 default=5e-3)
-        self.parser.add_argument("--num_epochs",
-                                 type=int,
-                                 help="number of epochs",
-                                 default=20)
-        self.parser.add_argument("--scheduler_step_size",
-                                 type=int,
-                                 help="step size of the scheduler",
-                                 default=15)
+
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",
@@ -163,30 +218,18 @@ class MonodepthOptions:
         self.parser.add_argument("--no_cuda",
                                  help="if set disables CUDA",
                                  action="store_true")
-        self.parser.add_argument("--num_workers",
-                                 type=int,
-                                 help="number of dataloader workers",
-                                 default=24)
 
-        # LOADING options
-        self.parser.add_argument("--load_weights_folder",
-                                 type=str,
-                                 help="name of model to load")
-        self.parser.add_argument("--models_to_load",
-                                 nargs="+",
-                                 type=str,
-                                 help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose"])
+
 
         # LOGGING options
         self.parser.add_argument("--log_frequency",
                                  type=int,
                                  help="number of batches between each tensorboard log",
-                                 default=250)
+                                 default=100)
         self.parser.add_argument("--save_frequency",
                                  type=int,
                                  help="number of epochs between each save",
-                                 default=1)
+                                 default=3)
 
         # EVALUATION options
         self.parser.add_argument("--eval_stereo",
@@ -201,7 +244,7 @@ class MonodepthOptions:
         self.parser.add_argument("--pred_depth_scale_factor",
                                  help="if set multiplies predictions by this number",
                                  type=float,
-                                 default=1)
+                             default=1)
         self.parser.add_argument("--ext_disp_to_eval",
                                  type=str,
                                  help="optional path to a .npy disparities file to evaluate")

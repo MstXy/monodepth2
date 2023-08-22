@@ -1,0 +1,94 @@
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:0 --depth_branch True  --batch_size 20
+# --optical_flow None
+
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/train.py --device cuda:1 --depth_branch True  --batch_size 20 --optical_flow flownet
+
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:2 t--depth_branch False --optical_flow flownet --batch_size 20
+
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/train.py --device cuda:3 --depth_branch False --optical_flow flownet --batch_size 20
+
+
+
+
+###############
+###############
+##2023 08 21 ##
+###############
+###############
+##############################################################
+# MonoFlowNet.py, flownet + depth training, good performence #
+##################################################################################################0 & 1
+# log dir /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/log/2023-08-20_22-45-09/mdp/models/weights_11
+# port 
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:0 --depth_branch True  --batch_size 20
+
+
+# Continue training lr=0.001
+# log dir 2023-08-21_23-22-12
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:0 --depth_branch True --optical_flow flownet --batch_size 20 --load_weights_folder /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/log/2023-08-20_22-45-09/mdp/models/weights_11 --num_workers 2 --learning_rate 0.001
+
+
+# Continue training lr=0.0001
+# log dir log/2023-08-21_23-22-41
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:1 --depth_branch True --optical_flow flownet --batch_size 20 --load_weights_floder /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/log/2023-08-20_22-45-09/mdp/models/weights_11 --num_workers 2 --learning_rate 0.0001
+
+
+
+
+
+########################
+##UPFLOW only training## 
+##################################################################################################4
+# MonoFlowNet.py, upflow only training, use occ in photo loss = False, 
+# log dir 2023-08-21_23-09-14
+# port 
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:4 --depth_branch False --optical_flow upflow --batch_size 17 --num_workers 2 --log_frequency 50 --photo_loss_use_occ False
+
+
+##################################################################################################5
+# MonoFlowNet.py, upflow only training, use occ in photo loss = True, 
+# log dir log/2023-08-21_23-09-28
+# port 
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:5 --depth_branch False --optical_flow upflow --batch_size 17 --num_workers 2 --log_frequency 50 --photo_loss_use_occ True
+
+
+########################
+##  UPFLOW + flownet  ## 
+##################################################################################################6
+# MonoFlowNet.py, upflow only training, use occ in photo loss = False, 
+# log dir /2023-08-21_23-21-42
+# port 
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:6 --depth_branch True --optical_flow upflow --batch_size 17 --num_workers 2 --log_frequency 50 --photo_loss_use_occ False
+
+
+##################################################################################################7
+# MonoFlowNet.py, upflow only training, use occ in photo loss = True, 
+# log dir 2023-08-21_23-21-39
+# port 
+conda activate monodepth
+export PYTHONPATH=/mnt/km-nfs/ns100002-share/Projects/test0820
+python /mnt/km-nfs/ns100002-share/Projects/test0820/monodepth2/networks/MonoFlowNet.py --device cuda:7 --depth_branch True --optical_flow upflow --batch_size 17 --num_workers 2 --log_frequency 50 --photo_loss_use_occ True
+
+
+
+
