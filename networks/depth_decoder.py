@@ -22,7 +22,7 @@ from networks.utils.correlation_block import CorrBlock
 
 class DepthDecoder(nn.Module):
     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=1, use_skips=True, inter_output=False, 
-                 drn=False, depth_att=False, depth_cv=False, depth_refine=False, corr_levels=[2,3], n_head=1,
+                 drn=False, depth_att=False, depth_cv=False, depth_refine=False, updown=False, corr_levels=[2,3], n_head=1,
                  cv_reproj=False, backproject_depth=None, project_3d=None, mobile_backbone=None):
         super(DepthDecoder, self).__init__()
 
@@ -65,6 +65,8 @@ class DepthDecoder(nn.Module):
         self.depth_att = depth_att
         # cost volume for depth estimation 
         self.depth_cv = depth_cv
+        # down sample
+        self.updown = updown
         # coarse2fine
         self.depth_refine = depth_refine
         # all corrs levels
@@ -99,15 +101,22 @@ class DepthDecoder(nn.Module):
             num_ch_out = self.num_ch_dec[i]
             self.convs[("upconv", i, 0)] = ConvBlock(num_ch_in, num_ch_out)
 
-            # # depth_att
-            # if self.depth_att:
-            #     num_ch_in = self.num_ch_dec[i]
-            #     if self.use_skips and i > 0:
-            #         num_ch_in += self.num_ch_enc[i - 1]
-            #     # self.convs[("att", i)] = ChannelAttention(num_ch_in)
-            #     # self.convs[("att", i)] = SpatialAttention()
-            #     self.convs[("att", i)] = CS_Block(num_ch_in)
-            #     # self.convs[("att", i)] = MultiHeadAttentionOne(n_head=1, d_model=num_ch_in, d_k=num_ch_in, d_v=num_ch_in)
+            # down sample
+            if self.updown and i in [4,3,2]:
+                self.convs[("down_conv", i)] = Conv3x3(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
+                # self.convs[("down_conv", i)] = SeparableConv(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
+
+            # depth_att
+            if self.depth_att:
+                num_ch_in = self.num_ch_dec[i]
+                if self.use_skips and i > 0:
+                    num_ch_in += self.num_ch_enc[i - 1]
+                    if self.updown and i in [4,3,2]:
+                        num_ch_in += self.num_ch_dec[i - 1]//2
+                    self.convs[("att", i)] = ChannelAttention(num_ch_in)
+                # self.convs[("att", i)] = SpatialAttention()
+                # self.convs[("att", i)] = CS_Block(num_ch_in)
+                # self.convs[("att", i)] = MultiHeadAttentionOne(n_head=1, d_model=num_ch_in, d_k=num_ch_in, d_v=num_ch_in)
             
 
             # # TODO: ensemble simple
@@ -157,6 +166,8 @@ class DepthDecoder(nn.Module):
                 num_ch_in += self.num_ch_enc[i - 1]
             # if self.depth_refine and i < 4:
             #     num_ch_in += 1
+            if self.updown and i in [4,3,2]:
+                num_ch_in += self.num_ch_dec[i - 1]//2
             num_ch_out = self.num_ch_dec[i]
             self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 
@@ -194,6 +205,9 @@ class DepthDecoder(nn.Module):
                 x = [upsample(x)]
             if self.use_skips and i > 0:
                 x += [input_features[i - 1]]
+
+            if self.updown and i in [4,3,2]:
+                x += [self.convs[("down_conv", i)](input_features[i - 2])] # self.num_ch_dec[i-1]//2
 
             # if self.depth_refine and i < 4:
             #     ## deconv
@@ -266,7 +280,8 @@ class DepthDecoder(nn.Module):
 
             x = torch.cat(x, 1)
             
-            if self.depth_att and i + 1 in self.corr_levels:
+            # if self.depth_att and i + 1 in self.corr_levels:
+            if self.depth_att and i > 0:
                 # apply self-attention
                 x = self.convs[("att", i)](x)
 

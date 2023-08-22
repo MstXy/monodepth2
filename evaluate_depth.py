@@ -4,6 +4,8 @@ import os
 import cv2
 import numpy as np
 
+import copy
+
 import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -23,6 +25,19 @@ from layers import BackprojectDepth, Project3D, transformation_from_parameters
 
 cv2.setNumThreads(0)  # This speeds up evaluation 5x on our unix systems (OpenCV 3.3.1)
 
+from thop.vision.basic_hooks import count_convNd, zero_ops
+from thop import profile
+
+class TestModel(nn.Module):
+    def __init__(self, encoder, decoder):
+        super(TestModel, self).__init__()
+        self.encoder = encoder
+        self.depth_decoder = decoder
+    def forward(self, x):
+        feat = self.encoder(x)
+        result = self.depth_decoder(feat)
+        return(result)
+    
 
 splits_dir = os.path.join(os.path.dirname(__file__), "splits")
 
@@ -177,6 +192,7 @@ def evaluate(opt, parser):
             elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "vitv3":
                 print("using mobileViT v3 xs")
                 encoder = MobileViT(parser, pretrained=False)
+                encoder_test =  copy.deepcopy(encoder)
                 opt.mobile_backbone = "mbvitv3_xs"
         else:
             opt.mobile_backbone = None
@@ -187,12 +203,20 @@ def evaluate(opt, parser):
             else:
                 opt.drn = False
                 encoder = networks.ResnetEncoder(opt.num_layers, False)
-        
-        if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
+
+        # change config to pos_2
+        # if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
+        if opt.load_weights_folder.split("/")[-3].split("_")[2] == "att":
             print("using depth attention")
             opt.depth_att = True
+            opt.updown = False
+        elif opt.load_weights_folder.split("/")[-3].split("_")[2] == "att2":
+            print("using depth attention + down sample")
+            opt.depth_att = True
+            opt.updown = True
         else:
             opt.depth_att = False
+            opt.updown = False
 
         if opt.load_weights_folder.split("/")[-3].split("_")[0] == "c2f":
             print("using coarse-2-fine")
@@ -309,12 +333,33 @@ def evaluate(opt, parser):
             project_3d[scale] = Project3D(BATCH_SIZE, h, w)
             project_3d[scale].cuda(device="cuda:{}".format(DEVICE_NUM))
 
+        # decoder alternatives:
+        if opt.load_weights_folder.split("/")[-3].split("_")[2] == "eff":
+            print("using efficient decoder")
+            opt.decoder = "efficient"
+            depth_decoder = networks.EfficientDecoder(encoder.num_ch_enc)
+            depth_decoder_test = networks.EfficientDecoder(encoder.num_ch_enc)
+        else:
+            print("using default decoder")
+            opt.decoder = "default"
+            depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
+                                                depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,updown=opt.updown,
+                                                corr_levels = all_corr_levels, n_head=opt.nhead,
+                                                cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d,
+                                                mobile_backbone=opt.mobile_backbone)
+            depth_decoder_test = copy.deepcopy(depth_decoder)
 
-        depth_decoder = networks.DepthDecoder(encoder.num_ch_enc, drn=opt.drn, 
-                                              depth_att=opt.depth_att, depth_cv=opt.depth_cv, depth_refine=opt.coarse2fine,
-                                              corr_levels = all_corr_levels, n_head=opt.nhead,
-                                              cv_reproj=opt.cv_reproj, backproject_depth=backproject_depth, project_3d=project_3d,
-                                              mobile_backbone=opt.mobile_backbone) 
+        # check params and FLOPs
+        test_model = TestModel(encoder_test, depth_decoder_test)
+        verbose = False
+        x = torch.randn(1, 3, 192, 640)
+        args = dict(inputs=(x,), verbose=verbose)
+        macs, params = profile(test_model, **args)
+        print(f'Params/FLOP: {params * 1e-6:.2f} M, {macs * 1e-9:.2f}G FLOPS')
+        
+        total = sum([p.numel() for p in encoder_test.parameters() if p.requires_grad])
+        total += sum([p.numel() for p in depth_decoder_test.parameters() if p.requires_grad])
+        print("%.2fM" % (total / 1e6))
 
         model_dict = encoder.state_dict()
         encoder.load_state_dict({k: v for k, v in encoder_dict.items() if k in model_dict})

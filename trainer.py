@@ -164,11 +164,20 @@ class Trainer:
             self.models["apnb"].to(self.device)
             self.parameters_to_train += list(self.models["apnb"].parameters())
 
-        self.models["depth"] = networks.DepthDecoder(
-            self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, 
-                corr_levels=self.opt.all_corr_levels, n_head=self.opt.nhead,
-                cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,
-                mobile_backbone=self.opt.mobile_backbone)
+        # alternative depth decoder:
+        if self.opt.decoder == "default":
+            print("using default depth decoder")
+            print("Using depth channel att fusion: %s" % self.opt.depth_att)
+            print("Using down sample: %s" % self.opt.updown)
+            self.models["depth"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, self.opt.scales, drn=self.opt.drn, 
+                    depth_att=self.opt.depth_att, depth_cv=self.opt.depth_cv, depth_refine=self.opt.coarse2fine, updown=self.opt.updown, 
+                    corr_levels=self.opt.all_corr_levels, n_head=self.opt.nhead,
+                    cv_reproj=self.opt.cv_reproj, backproject_depth=self.backproject_depth, project_3d=self.project_3d,
+                    mobile_backbone=self.opt.mobile_backbone)
+        elif self.opt.decoder == "efficient":
+            print("using efficient decoder")
+            self.models["depth"] = networks.EfficientDecoder(self.models["encoder"].num_ch_enc)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 

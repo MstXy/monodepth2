@@ -98,6 +98,13 @@ class MonodepthOptions:
                                           "mobilevitv3_xs",
                                           "None"])
         # -----------------------------
+        # decoder switch -----------
+        self.parser.add_argument("--decoder",
+                                 type=str,
+                                 help="alternative decoder choices",
+                                 default="default",
+                                 choices=["default", "efficient"])
+        # -----------------------------
         # heads for transformer -----------
         self.parser.add_argument("--nhead",
                                  type=int,
@@ -105,10 +112,14 @@ class MonodepthOptions:
                                  default=1)
         # -----------------------------  
         # improved depth decoder -------------
+        self.parser.add_argument('--updown',
+                                 type=bool,
+                                 help="use down sample in depth decoder",
+                                 default=True)
         self.parser.add_argument('--depth_att',
                                  type=bool,
                                  help="use attention in depth decoder",
-                                 default=False)
+                                 default=True)
         self.parser.add_argument('--depth_cv',
                                  type=bool,
                                  help="use attention in depth decoder",
@@ -183,7 +194,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=16)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",

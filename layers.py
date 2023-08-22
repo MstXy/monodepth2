@@ -121,14 +121,14 @@ class ConvBlock(nn.Module):
 class Conv3x3(nn.Module):
     """Layer to pad and convolve input
     """
-    def __init__(self, in_channels, out_channels, use_refl=True):
+    def __init__(self, in_channels, out_channels, use_refl=True, stride=1):
         super(Conv3x3, self).__init__()
 
         if use_refl:
             self.pad = nn.ReflectionPad2d(1)
         else:
             self.pad = nn.ZeroPad2d(1)
-        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3)
+        self.conv = nn.Conv2d(int(in_channels), int(out_channels), 3, stride=stride)
 
     def forward(self, x):
         out = self.pad(x)
@@ -393,3 +393,15 @@ class CS_Block(nn.Module):
         #########################
         
         return out_feature
+
+## separable Conv
+class SeparableConv(nn.Module):
+    def __init__(self, nin, nout, kernel_size=3, stride=1, padding=1, bias=True):
+        super(SeparableConv, self).__init__()
+        self.depthwise = nn.Conv2d(nin, nin, kernel_size=kernel_size, stride=stride, padding=padding, groups=nin, bias=bias)
+        self.pointwise = nn.Conv2d(nin, nout, kernel_size=1, stride=1, bias=bias)
+
+    def forward(self, x):
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+        return out
