@@ -1,0 +1,34 @@
+ninja_required_version = 1.3
+cxx = c++
+nvcc = /usr/local/cuda/bin/nvcc
+
+cflags = -pthread -B /home/liu/anaconda3/envs/upflow/compiler_compat -Wl,--sysroot=/ -Wsign-compare -DNDEBUG -g -fwrapv -O3 -Wall -Wstrict-prototypes -fPIC -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/pybind11/include/ -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/TH -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/THC -I/usr/local/cuda/include -I/home/liu/anaconda3/envs/upflow/include/python3.8 -c
+post_cflags = -std=c++14 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1013"' -DTORCH_EXTENSION_NAME=correlation_cuda -D_GLIBCXX_USE_CXX11_ABI=1
+cuda_cflags = -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/pybind11/include/ -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/torch/csrc/api/include -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/TH -I/home/liu/anaconda3/envs/upflow/lib/python3.8/site-packages/torch/include/THC -I/usr/local/cuda/include -I/home/liu/anaconda3/envs/upflow/include/python3.8 -c
+cuda_post_cflags = -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr --compiler-options ''"'"'-fPIC'"'"'' -gencode arch=compute_86,code=sm_86 -ccbin /usr/bin/gcc-9 -DTORCH_API_INCLUDE_EXTENSION_H '-DPYBIND11_COMPILER_TYPE="_gcc"' '-DPYBIND11_STDLIB="_libstdcpp"' '-DPYBIND11_BUILD_ABI="_cxxabi1013"' -DTORCH_EXTENSION_NAME=correlation_cuda -D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14
+cuda_dlink_post_cflags = 
+ldflags = 
+
+rule compile
+  command = $cxx -MMD -MF $out.d $cflags -c $in -o $out $post_cflags
+  depfile = $out.d
+  deps = gcc
+
+rule cuda_compile
+  depfile = $out.d
+  deps = gcc
+  command = $nvcc  $cuda_cflags -c $in -o $out $cuda_post_cflags
+
+
+
+
+
+build /home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o: compile /home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/correlation_cuda.cc
+build /home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o: cuda_compile /home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/correlation_cuda_kernel.cu
+
+
+
+
+
+
+

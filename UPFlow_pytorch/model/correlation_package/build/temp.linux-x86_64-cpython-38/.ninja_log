@@ -1,0 +1,12 @@
+# ninja log v5
+0	15656	1686627832265699794	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	393244d79f5f81f8
+0	36905	1686628213121830125	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	f5db019007bedfa8
+0	36704	1686628308111850270	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	b460c607c1977bb1
+1	15479	1686639410812101878	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	23242962fcecdbee
+0	23144	1686639494023788082	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o	fa0ef51f380424ff
+0	39407	1686639510294744189	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	857fce61b06fa602
+13	15677	1686639673532962290	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	11c734e1fed2bf88
+13	23478	1686639681314073806	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o	f30a31521a9d31fe
+14	23581	1686640356605721797	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda.o	17ba5e776a2c4d49
+14	37352	1686640370394723871	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	a5fa3051c1f291fc
+12	15049	1686643200556974304	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-38/correlation_cuda_kernel.o	48828dd68b663f93

@@ -1,0 +1,3 @@
+# ninja log v5
+0	18171	1686308766933840817	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-39/correlation_cuda_kernel.o	41b3a93836f042fe
+0	28164	1686308776902167263	/home/liu/data16t/Projects/depth_estim/UPFlow_pytorch/model/correlation_package/build/temp.linux-x86_64-cpython-39/correlation_cuda.o	68ea5881613fe6da

@@ -7,7 +7,10 @@ from tensorboardX import SummaryWriter
 import flow_vis
 import json
 import os
-
+import sys
+file_dir = os.path.dirname(__file__)
+parent_project = os.path.dirname(os.path.dirname(file_dir))
+sys.path.append(parent_project)
 
 # ==== torch import
 import torch
@@ -33,6 +36,7 @@ options = MonodepthOptions()
 opt = options.parse()
 
 
+
 import pdb
 import sys
 
@@ -40,7 +44,7 @@ import sys
 fpath = os.path.join(os.path.dirname(os.path.dirname(__file__)), "splits", opt.split, "{}_files.txt")
 
 
-IF_DEBUG = True
+IF_DEBUG = False
 if IF_DEBUG:
     opt.batch_size = 3
     opt.num_workers = 0
