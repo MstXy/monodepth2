@@ -12,7 +12,7 @@ import skimage.transform
 import numpy as np
 import PIL.Image as pil
 
-from monodepth2.kitti_utils import generate_depth_map
+from monodepth2.utils.kitti_utils import generate_depth_map
 from .mono_dataset import MonoDataset
 import numpy as np
 from PIL import Image
