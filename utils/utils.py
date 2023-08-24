@@ -209,7 +209,7 @@ def torch_warp(img2, flow):
     return img1_warped
 
 
-def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=1, occ_alpha_2=0.05):
+def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.7, occ_alpha_2=0.05):
     def sum_func(x):
         '''sqrt(flow[0]^2 + flow[1]^2)
         '''
@@ -259,13 +259,16 @@ def tensor_to_pil(input_tensor):
     return out
 
 
-def flow_to_pil(flow_to_vis):
+def flow_to_pil(flow_to_vis, to_pil=True):
     flow_to_vis_dup = flow_to_vis.permute(1, 2, 0).clone().detach().cpu().numpy()
     vis_flow = torch.from_numpy(
         flow_vis.flow_to_color(flow_to_vis_dup,
                                convert_to_bgr=False)).permute(2, 0, 1)
     torch_to_pil = torchvision.transforms.ToPILImage()
-    return torch_to_pil(vis_flow)
+    if to_pil:
+        return torch_to_pil(vis_flow)
+    else:
+        return vis_flow
 
 
 def stitching_and_show(img_list, ver=False, show=True):
@@ -279,7 +282,7 @@ def stitching_and_show(img_list, ver=False, show=True):
     C, H, W = img_list[0].size()
     img_num = len(img_list)
     if not ver:
-        stitching = Image.new('RGB', (H, img_num * W))
+        stitching = Image.new('RGB', (img_num * W, H))
         i = 0
         for img in img_list:
             if img.size()[0] == 2:  # flow
@@ -290,7 +293,7 @@ def stitching_and_show(img_list, ver=False, show=True):
             stitching.paste(im=img, box=(i * W, 0))
             i += 1
     else:
-        stitching = Image.new('RGB', (img_num * H, W))
+        stitching = Image.new('RGB', (W, img_num * H))
         i = 0
         for img in img_list:
             if img.size()[0] == 2:  # flow
@@ -310,6 +313,54 @@ def img_diff_show(img1:torch.Tensor, img2:torch.Tensor):
     diff = torch.unsqueeze(torch.sum(torch.abs(img1 - img2), dim=0), dim=0)
     return diff
 
+
+def add_img_weighted(img1, img2, alpha1=0.5):
+    assert type(img1) == type(img2)
+    if isinstance(img1, torch.Tensor):
+        if img1.size() != img2.size():
+            raise ValueError("Input images must have the same size and number of channels.")
+    elif isinstance(img1, np.ndarray):
+        if img1.shape != img2.shape:
+            raise ValueError("Input images must have the same size and number of channels.")
+    return img1 * alpha1 + img2 * (1-alpha1)
+
+
+def log_vis_1(inputs, outputs, occ_dict, img1_idx, img2_idx, j):
+    ''' top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
+    Args:
+        img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
+        j: the j th img in batch
+    '''
+    img_1_img_2_and_flow = torchvision.transforms.functional.pil_to_tensor(
+        stitching_and_show(img_list=[
+            inputs['color_aug', img2_idx, 0][j],  # curr
+            occ_dict[(img1_idx, img2_idx)][j].repeat(3, 1, 1),  # occ_prev_curr
+            # occ_dict[(img2_idx, img1_idx)][j].repeat(3, 1, 1),  # occ_curr_prev
+            outputs['flow_fwd'][img2_idx][j],  # flow_prev_curr(img2_idx=0); flow_curr_next(img2_idx=1)
+            # outputs['flow_bwd'][img2_idx][j],  # flow_curr_prev
+            inputs['color_aug', img1_idx, 0][j] # prev
+        ], ver=True, show=False))
+    return img_1_img_2_and_flow
+
+def log_vis_2(inputs, outputs, occ_dict, img1_idx, img2_idx, f_warped_dict, j):
+    ''' diff(target, source), diff * mask, warped, source, flow_img1_img2
+    Args:
+        img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
+        j: the j th img in batch
+    '''
+    diff = img_diff_show(f_warped_dict[(img1_idx, img2_idx)][j], inputs['color_aug', img1_idx, 0][j])
+    diff_mask = diff * occ_dict[(img1_idx, img2_idx)][j].repeat(3, 1, 1)
+    aa = f_warped_dict[(img1_idx, img2_idx)][j]
+
+    source = inputs['color_aug', img1_idx, 0][j]
+    flow_img1_img2 = outputs['flow_fwd'][img2_idx][j]
+
+    results = torchvision.transforms.functional.pil_to_tensor(
+        stitching_and_show(img_list=[
+            diff, diff_mask, aa, source, flow_img1_img2
+        ], ver=True, show=False)
+    )
+    return results
 
 def edge_aware_smoothness_order1(img, pred):
 

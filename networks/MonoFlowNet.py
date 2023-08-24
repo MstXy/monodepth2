@@ -8,6 +8,7 @@ import flow_vis
 import json
 import os
 import sys
+import pdb
 file_dir = os.path.dirname(__file__)
 parent_project = os.path.dirname(os.path.dirname(file_dir))
 sys.path.append(parent_project)
@@ -35,16 +36,9 @@ from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
 
-
-
-import pdb
-import sys
-
-
 fpath = os.path.join(os.path.dirname(os.path.dirname(__file__)), "splits", opt.split, "{}_files.txt")
 
-
-IF_DEBUG = False
+IF_DEBUG = True
 if IF_DEBUG:
     opt.batch_size = 3
     opt.num_workers = 0
@@ -102,15 +96,7 @@ class MonoFlowNet(nn.Module):
             flow_prev_curr, flow_curr_next, flow_curr_prev, flow_next_curr, loss_by_upflow = self.predict_flow(inputs, features)
             outputs['loss_by_upflow'] = loss_by_upflow
             outputs["flow_fwd"] = (flow_prev_curr, flow_curr_next)
-            # if IF_DEBUG:
-            #     mono_utils.stitching_and_show(img_list=[flow_prev_curr[0], flow_curr_next[0]], ver=True)
-            # outputs["flow_bwd"] = (flow_curr_prev, flow_next_curr)
-            # ===== flow occlusion map
-            if opt.flow_occ_check:
-                occ_map_prev_curr, occ_map_curr_prev = mono_utils.cal_occ_map(flow_prev_curr, flow_curr_prev)
-                occ_map_curr_next, occ_map_next_curr = mono_utils.cal_occ_map(flow_curr_next, flow_next_curr)
-                outputs['flow_occ_fwd'] = (occ_map_prev_curr, occ_map_curr_next)
-                outputs['flow_occ_bwd'] = (occ_map_curr_prev, occ_map_next_curr)
+            outputs["flow_bwd"] = (flow_curr_prev, flow_next_curr)
         return outputs
 
     def cal_fwd_flownet(self, feature_1, feature_2):
@@ -147,16 +133,11 @@ class MonoFlowNet(nn.Module):
     def predict_flow(self, inputs, features):
         if self.opt.optical_flow in ['flownet', ]:
             flow_prev_curr = self.cal_fwd_flownet(features[-1], features[0])
-            # if IF_DEBUG:
-            #     mono_utils.stitching_and_show(img_list=[features[-1][0][0][0:2, :], features[0][0][0][0:2, :]], ver=True, show=True)
-            #     mono_utils.stitching_and_show(img_list=[inputs['color_aug', -1, 0][0], inputs['color_aug', 0, 0][0], inputs['color_aug', 1, 0][0]],
-            #                                   ver=True, show=True)
-
-            # flow_curr_prev = self.cal_fwd_flownet(features[0], features[1])
+            flow_curr_prev = self.cal_fwd_flownet(features[0], features[-1])
             flow_curr_next = self.cal_fwd_flownet(features[0], features[1])
-            # flow_next_curr = self.cal_fwd_flownet(features[1], features[0])
-            return flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled'], 0, 0, 0 #\
-                   # flow_curr_prev['level2_upsampled'], flow_next_curr['level2_upsampled']
+            flow_next_curr = self.cal_fwd_flownet(features[1], features[0])
+            return flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled'], \
+                   flow_curr_prev['level2_upsampled'], flow_next_curr['level2_upsampled'], 0
 
         elif self.opt.optical_flow in ["upflow", ]:
             flow_prev_curr = self.cal_fwd_upflow(features[-1], features[0], inputs[("color_aug", -1, 0)], inputs[("color_aug", 0, 0)])
@@ -346,33 +327,6 @@ class MonoFlowLoss():
         if not self.opt.no_ssim:
             self.ssim = SSIM()
 
-
-
-    def flow_warp(self, inputs, outputs):
-        # ==== image warping using flow
-        flow_prev_curr = outputs["flow_fwd"][0]
-        flow_curr_next = outputs["flow_fwd"][1]
-        prev_img_warped = uptools.torch_warp(inputs[('color_aug', 0, 0)], flow_prev_curr)
-        curr_img_warped = uptools.torch_warp(inputs[('color_aug', 1, 0)], flow_curr_next)
-        #
-        # if IF_DEBUG and (count % (1e20) == 0):
-        #     mono_utils.stitching_and_show([target[0], occ_fw[0], flow_fwd[0]], ver=True)
-
-        # # todo: assume they are equal
-        # if self.opt.optical_flow in ["upflow", ]:
-        #     prev_img_warped = uptools.torch_warp(inputs[("color_aug", 0, 0)],
-        #                                          flow_prev_curr)  # warped im1 by forward flow and im2
-        #     curr_img_warped = uptools.torch_warp(inputs[("color_aug", 1, 0)], flow_curr_next)
-        # elif self.opt.optical_flow in ["flownet", ]:
-        #     # warp I_curr(inputs[('color', -1, 0)]) to prev_img_warped
-        #     # warp I_next(inputs[('color', 0, 0)]) to curr_img_warped
-        #     ## I_curr[:, i+flow_prev_curr[i,j][0], j+flow_prev_curr[i,j][1]] = I_prev[:, i, j]
-        #     prev_img_warped = mono_utils.torch_warp(img2=inputs[('color', 0, 0)], flow=flow_prev_curr)
-        #     curr_img_warped = mono_utils.torch_warp(img2=inputs[('color', 1, 0)], flow=flow_curr_next)
-
-        outputs[("warped_flow", -1, "level2_upsampled")] = prev_img_warped  # warped previous to current by flow
-        outputs[("warped_flow", 0, "level2_upsampled")] = curr_img_warped  # warped previous to current by flow
-
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch, by depth info and flow info both.
         Generated images are saved into the `outputs` dictionary.
@@ -430,75 +384,95 @@ class MonoFlowLoss():
                         outputs[("color_identity", frame_id, scale)] = \
                             inputs[("color", frame_id, source_scale)]
 
+    def _compute_flow_loss_paired(self, img1, img2, flow_1_2, flow_2_1, name="prev_curr"):
+        flow_loss = {}
+        flow_loss['all_flow_loss'] = 0
+        # ===== flow warped paired:
+        img1_warped = mono_utils.torch_warp(img2, flow_1_2)
+        img2_warped = mono_utils.torch_warp(img1, flow_2_1)
+
+        # ===== occ_1_2, occ_2_1:
+        if opt.flow_occ_check:
+            occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1)
+
+        # ===== photo loss calculation:
+        photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
+                                                photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_delta=0.4, photo_loss_use_occ=True) + \
+                     self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
+                                                photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_delta=0.4, photo_loss_use_occ=True)
+        photo_loss_ssim = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
+                                                photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_delta=0.4, photo_loss_use_occ=True) + \
+                     self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
+                                                photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_delta=0.4, photo_loss_use_occ=True)
+
+        # l1_plus_ssmi = self.l1_plus_ssmi(img1, img1_warped, occ_1_2, alpha=0.85)
+
+        flow_loss["photo_loss_l1"] = photo_loss_l1
+        flow_loss["photo_loss_ssim"] = photo_loss_ssim
+        # ===== smooth loss calculation:
+        # 1.1 First Order smoothness loss
+        # smo_loss = mono_utils.edge_aware_smoothness_order1(
+        #     img=target, pred=flow_fwd)
+        # flow_loss += smo_loss
+        # 1.2 Second Order smoothness loss
+
+        # ===== census loss calculation:
+
+        # ===== multi scale distillation loss calculation:
+
+        flow_loss["smo_loss"] = 0
+        return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
+
     def compute_losses(self, inputs, outputs):
         self.generate_images_pred(inputs, outputs)
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
+        occ_dict = {}
+        f_warped_dict = {}
         total_loss = 0
-        flow_loss = 0
         if self.opt.optical_flow in ['flownet', ]:
-            self.flow_warp(inputs, outputs)
-            if opt.flow_occ_check:
-                occ_map_prev_curr, occ_map_curr_next = outputs['flow_occ_fwd']
-                occ_map_curr_prev, occ_map_next_curr = outputs['flow_occ_bwd']
+            # compute flow losses, warp img, calculate occ map
 
-            ## compute flow losses
-            for k, pred in outputs.items():
-                if 'warped_flow' in k and -1 in k:
-                    #target=inputs["color_aug", -1, 0], pred=prev_warped_by_curr ('warped_flow', -1, 0), occ_fwd=occ_map_prev_curr
-                    target = inputs["color_aug", -1, 0]
-                    # occ_fw = occ_map_prev_curr
-                    flow_fwd = outputs['flow_fwd'][0]
-                    # count += 1
+            # prev(-1) to curr(0)
+            flow_loss_1, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                img1=inputs["color_aug", -1, 0],
+                img2=inputs["color_aug", 0, 0],
+                flow_1_2=outputs['flow_fwd'][0],
+                flow_2_1=outputs['flow_bwd'][0],
+                name="prev_curr")
+            f_warped_dict[(-1, 0)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
+            f_warped_dict[(0, -1)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
+            occ_dict[(-1, 0)] = occ_1_2
+            occ_dict[(0, -1)] = occ_2_1
 
-                elif 'warped_flow' in k and 0 in k:
-                    # target=inputs["color_aug", 0, 0], pred=curr_warped_by_next ('warped_flow', 0, 0), occ_fwd=occ_map_curr_next
-                    target = inputs[("color_aug", 0, 0)]
-                    # occ_fw = occ_map_curr_next
-                    flow_fwd = outputs['flow_fwd'][1]
-                else:
-                    continue
+            # curr(0) to next(1)
+            flow_loss_2, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                img1=inputs["color_aug", 0, 0],
+                img2=inputs["color_aug", 1, 0],
+                flow_1_2=outputs['flow_fwd'][1],
+                flow_2_1=outputs['flow_bwd'][1],
+                name="curr_next")
+            f_warped_dict[(0, 1)] = img1_warped  # curr_img warped by next_img and flow_curr_to_next
+            f_warped_dict[(1, 0)] = img2_warped  # next_img warped by curr_img and flow_next_to_curr
+            occ_dict[(0, 1)] = occ_1_2
+            occ_dict[(1, 0)] = occ_2_1
 
-                # ==== todo: flow loss level
-                # ==== 1. smooth loss
-                # 1.1 First Order smoothness loss
-                # smo_loss = mono_utils.edge_aware_smoothness_order1(
-                #     img=target, pred=flow_fwd)
-                smo_loss = 0
-                # flow_loss += smo_loss
-                # 1.2 Second Order smoothness loss
+            losses["smo_loss"] = flow_loss_1["smo_loss"] + flow_loss_2["smo_loss"]
+            losses["photo_loss_l1"] = flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
+            losses["photo_loss_ssim"] = flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
 
-                # ==== 2. photo loss
-                # if True:  # self.conf.stop_occ_gradient:
-                #     occ_fw = occ_fw.clone().detach()
-                photo_loss = 0
-                # photo_loss = self.photo_loss_multi_type(target, pred, occ_fw,
-                #                                         photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
-                #               photo_loss_delta=0.4, photo_loss_use_occ=False)
-                # flow_loss += photo_loss
-
-
-                l1_loss = torch.mean(torch.abs(pred - target + 1e-6))
-                self.ssim.to(pred.device)
-                ssim_loss = torch.mean(self.ssim(pred, target))
-                flow_loss += 0.85 * ssim_loss + 0.15 * l1_loss
-
-
-                # ==== 3. census loss
-
-                # ==== 4. pyramid distillation loss
-
-                # if IF_DEBUG and count % 10000 == 0:
-                #     print("smo_loss={}, photo_loss={}".format(smo_loss, photo_loss))
-            losses["flow_loss"] = flow_loss
-            losses["smo_loss"] = smo_loss
-            losses["photo_loss"] = photo_loss
-            total_loss += flow_loss
+            losses["flow_loss"] = losses["photo_loss_l1"] + losses["photo_loss_ssim"]  # + ...
+            total_loss += losses["flow_loss"]
 
         if self.opt.optical_flow in ['upflow']:
             self.flow_warp(inputs, outputs)
             total_loss += outputs['loss_by_upflow']
+            raise NotImplementedError
         
         if self.opt.depth_branch:
             for scale in self.opt.scales:
@@ -583,7 +557,7 @@ class MonoFlowLoss():
 
         total_loss /= self.num_scales
         losses["loss"] = total_loss
-        return losses
+        return losses, occ_dict, f_warped_dict
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -720,7 +694,6 @@ class MonoFlowLoss():
             loss_diff, occ_weight = self.weighted_ssim(x, y, occ_mask)
         else:
             raise ValueError('wrong photo_loss type: %s' % photo_loss_type)
-
         if photo_loss_use_occ:
             photo_loss = torch.sum(loss_diff * occ_weight) / (torch.sum(occ_weight) + 1e-6)
         else:
@@ -784,76 +757,13 @@ class MonoFlowLoss():
         result = ssim_n / ssim_d
         return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
 
-
-#############################         test          ###############################
-def model_test():
-    opt.depth_branch = True
-    opt.optical_flow = 'flownet'
-    opt.batch_size = 10
-
-    model = MonoFlowNet().to(opt.device)
-    inputs = {}
-    for i in opt.frame_ids:
-        inputs[("color_aug", i, 0)] = torch.randn(opt.batch_size, 3, 192, 640).to(opt.device)
-
-    ## params and flops evaluation
-    from thop import profile
-    flops, params = profile(model, inputs=(inputs,))
-    print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
-    t1 = time.time()
-    outputs = model(inputs)
-    print('time spent:', time.time() - t1)
-    for k, v in outputs.items():
-        print(k, v.shape)
-
-
-def use_single_gpu(gpu, tmpdataset):
-    t1 = time.time()
-    mono_loss = MonoFlowLoss()
-    model = MonoFlowNet().to(gpu)
-    model_optimizer = optim.Adam(model.parameters(), 0.001)
-    tmp_loader = DataLoader(
-        tmpdataset, opt.batch_size, True,
-        num_workers=opt.num_workers, pin_memory=True, drop_last=True)
-    t2 = 0
-
-    def preprocess(self, inputs):
-
-        """Resize colour images to the required scales and augment if required
-
-                We create the color_aug object in advance and apply the same augmentation to all
-                images in this item. This ensures that all images input to the pose network receive the
-                same augmentation.
-                """
-        color_aug = transforms.ColorJitter(
-            self.brightness, self.contrast, self.saturation, self.hue)
-        for k in list(inputs):
-            frame = inputs[k]
-            if "color" in k:
-                n, im, _ = k
-                for i in range(1, self.num_scales):
-                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
-
-        for k in list(inputs):
-            f = inputs[k]
-            if "color" in k:
-                n, im, i = k
-                # inputs[(n, im, i)] = (self.to_tensor(f))
-                inputs[(n + "_aug", im, i)] = color_aug(f)
-
-
-    for idx, inputs in enumerate(tqdm(tmp_loader)):
-        for key, ipt in inputs.items():
-            inputs[key] = ipt.to(gpu)
-        preprocess(inputs)
-        outputs = model(inputs)
-        losses = mono_loss.compute_losses(inputs, outputs)
-        losses['loss'].backward()
-        if idx % 30 == 0:
-            print('using ddp, idx={}, loss={}, time spent={}'.format(idx * opt.batch_size, losses["loss"].cpu().data, time.time()-t2))
-            t2 = time.time()
-        model_optimizer.step()
-    print(time.time() - t1)
+    def l1_plus_ssmi(self, img1, img1_warped, occ_1_2, alpha=0.85):
+        l1_sum = torch.abs(img1_warped - img1 + 1e-6)
+        l1_loss = torch.sum(l1_sum * occ_1_2) / (torch.sum(occ_1_2) + 1e-6)
+        self.ssim.to(img1.device)
+        ssim_sum = self.ssim(img1_warped, img1)
+        ssim_loss = torch.sum(ssim_sum * occ_1_2) / (torch.sum(ssim_sum) + 1e-6)
+        return alpha * ssim_loss + (1-alpha) * l1_loss
 
 
 class DDP_Trainer():
@@ -869,7 +779,6 @@ class DDP_Trainer():
                          "kitti_odom": datasets.KITTIOdomDataset}
         self.dataset = datasets_dict[opt.dataset]
         self.train_filenames = mono_utils.readlines(fpath.format("train"))
-        breakpoint()
         img_ext = '.png'
         num_train_samples = len(self.train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
@@ -972,6 +881,8 @@ class DDP_Trainer():
         if not os.path.exists(save_folder):
             os.makedirs(save_folder, exist_ok=True)
         torch.save(self.ddp_model.state_dict(), save_path)
+        optim_save_path = os.path.join(save_folder, "{}.pth".format("adam"))
+        torch.save(self.model_optimizer.state_dict(), optim_save_path)
 
     def log_time(self, batch_idx, duration, losses):
         """Print a logging statement to the terminal
@@ -992,41 +903,34 @@ class DDP_Trainer():
                                   mono_utils.sec_to_hm_str(time_sofar), mono_utils.sec_to_hm_str(training_time_left),
                                   curr_lr, smo_loss, photo_loss))
 
-    def log(self, mode, inputs, outputs, losses):
+
+    def log(self, mode, inputs, outputs, losses, occ_dict, f_warped_dict):
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
         for l, v in losses.items():
             writer.add_scalar("{}".format(l), v, self.step)
 
-        for j in range(min(4, self.opt.batch_size)):  # write a maxmimum of four images
+        for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
             if self.opt.optical_flow is not None:
-                tmp = outputs['flow_fwd'][0][j].permute(1, 2, 0).clone().detach().cpu().numpy()
-                to_tensorboard_0 = transforms.functional.pil_to_tensor(
-                    mono_utils.stitching_and_show(img_list=[
-                    inputs['color_aug', -1, 0][j],  # prev
-                    outputs['flow_fwd'][0][j],  # flow_prev_curr
-                    inputs['color_aug', 0, 0][j]  # curr
-                ], ver=True, show=False)
-                )
+                # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
+                prev_curr_and_flow = mono_utils.log_vis_1(inputs, outputs, occ_dict, -1, 0, j)
+                curr_next_and_flow = mono_utils.log_vis_1(inputs, outputs, occ_dict, 0, 1, j)
 
-                to_tensorboard_diff = transforms.functional.pil_to_tensor(
-                    mono_utils.stitching_and_show(img_list=[
-                    mono_utils.img_diff_show(outputs[("warped_flow", -1, 'level2_upsampled')][j], inputs['color_aug', -1, 0][j]),  # diff
-                    outputs[("warped_flow", -1, 'level2_upsampled')][j],  # prev warped by flow
-                    inputs['color_aug', -1, 0][j]  # prev
-                ], ver=True, show=False)
-                )
+                # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
+                prev_warped_prev_and_diff = \
+                    mono_utils.log_vis_2(inputs, outputs, occ_dict, -1, 0, f_warped_dict, j)
+                curr_warped_curr_and_diff = \
+                    mono_utils.log_vis_2(inputs, outputs, occ_dict, 0, 1, f_warped_dict, j)
 
-                flow_tmp = torch.from_numpy(flow_vis.flow_to_color(tmp, convert_to_bgr=False)).permute(2, 0, 1)
-                writer.add_image('flow_prev_curr/{}'.format(j), to_tensorboard_0, self.step)
-                tmp = outputs['flow_fwd'][1][j].permute(1, 2, 0).clone().detach().cpu().numpy()
-                flow_tmp = torch.from_numpy(flow_vis.flow_to_color(tmp, convert_to_bgr=False)).permute(2, 0, 1)
-                writer.add_image('flow_curr_next/{}'.format(j), flow_tmp, self.step)
-                writer.add_image('prev_warped_by_flow', to_tensorboard_diff, self.step)
-                writer.add_image('curr_warped_by_flow', outputs[("warped_flow", 0, 'level2_upsampled')][j], self.step)
-                if opt.flow_occ_check:
-                    writer.add_image('flow_occ_fwd', outputs['flow_occ_fwd'][0][j], self.step)
+                writer.add_image('1.Curr_2.OccPrevCurr_3.FlowPrevCurr_4.Prev/{}'.format(j),
+                                 prev_curr_and_flow, self.step)
+                writer.add_image('1.Next_2.OccCurrNext_3.FlowCurrNext_4.Curr/{}'.format(j),
+                                 curr_next_and_flow, self.step)
+                writer.add_image('1.Diff_2.DiffMasked_3.WarpedPrev_4.Prev_5.FlowPrevCurr/{}'.format(j),
+                                 prev_warped_prev_and_diff, self.step)
+                writer.add_image('1.Diff_2.DiffMasked_3.WarpedCurr_4.Curr_5.FlowCurrNext/{}'.format(j),
+                                 curr_warped_curr_and_diff, self.step)
 
             if self.opt.depth_branch:
                 for s in self.opt.scales:
@@ -1127,7 +1031,7 @@ class DDP_Trainer():
         start_batch_time = time.time()
         self.preprocess(inputs)
         outputs = self.ddp_model(inputs)
-        losses = self.mono_loss.compute_losses(inputs, outputs)
+        losses, occ_dict, f_warped_dict = self.mono_loss.compute_losses(inputs, outputs)
         losses['loss'].backward()
         self.model_optimizer.step()
 
@@ -1138,7 +1042,7 @@ class DDP_Trainer():
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
             if "depth_gt" in inputs and self.opt.depth_branch:
                 self.mono_loss.depth_evaluation(inputs, outputs, losses)
-            self.log("train", inputs, outputs, losses)
+            self.log("train", inputs, outputs, losses, occ_dict, f_warped_dict)
         self.step += 1
 
     def _run_epoch(self):
@@ -1197,7 +1101,7 @@ def prepare_dataloader(dataset):
         batch_size=opt.batch_size,
         num_workers=opt.num_workers,
         pin_memory=True,
-        shuffle=False,
+        shuffle=True,
         sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
         drop_last=True
     )
@@ -1210,6 +1114,78 @@ def main(rank: int, world_size: int):
     trainer = DDP_Trainer(gpu_id=rank, train_loader=train_loader)
     trainer.train()
     destroy_process_group()
+
+
+
+#############################         test          ###############################
+def model_test():
+    opt.depth_branch = True
+    opt.optical_flow = 'flownet'
+    opt.batch_size = 10
+
+    model = MonoFlowNet().to(opt.device)
+    inputs = {}
+    for i in opt.frame_ids:
+        inputs[("color_aug", i, 0)] = torch.randn(opt.batch_size, 3, 192, 640).to(opt.device)
+
+    ## params and flops evaluation
+    from thop import profile
+    flops, params = profile(model, inputs=(inputs,))
+    print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
+    t1 = time.time()
+    outputs = model(inputs)
+    print('time spent:', time.time() - t1)
+    for k, v in outputs.items():
+        print(k, v.shape)
+
+def use_single_gpu(gpu, tmpdataset):
+    t1 = time.time()
+    mono_loss = MonoFlowLoss()
+    model = MonoFlowNet().to(gpu)
+    model_optimizer = optim.Adam(model.parameters(), 0.001)
+    tmp_loader = DataLoader(
+        tmpdataset, opt.batch_size, True,
+        num_workers=opt.num_workers, pin_memory=True, drop_last=True)
+    t2 = 0
+
+    def preprocess(self, inputs):
+
+        """Resize colour images to the required scales and augment if required
+
+                We create the color_aug object in advance and apply the same augmentation to all
+                images in this item. This ensures that all images input to the pose network receive the
+                same augmentation.
+                """
+        color_aug = transforms.ColorJitter(
+            self.brightness, self.contrast, self.saturation, self.hue)
+        for k in list(inputs):
+            frame = inputs[k]
+            if "color" in k:
+                n, im, _ = k
+                for i in range(1, self.num_scales):
+                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
+
+        for k in list(inputs):
+            f = inputs[k]
+            if "color" in k:
+                n, im, i = k
+                # inputs[(n, im, i)] = (self.to_tensor(f))
+                inputs[(n + "_aug", im, i)] = color_aug(f)
+
+
+    for idx, inputs in enumerate(tqdm(tmp_loader)):
+        for key, ipt in inputs.items():
+            inputs[key] = ipt.to(gpu)
+        preprocess(inputs)
+        outputs = model(inputs)
+        losses = mono_loss.compute_losses(inputs, outputs)
+        losses['loss'].backward()
+        if idx % 30 == 0:
+            print('using ddp, idx={}, loss={}, time spent={}'.format(idx * opt.batch_size, losses["loss"].cpu().data, time.time()-t2))
+            t2 = time.time()
+        model_optimizer.step()
+    print(time.time() - t1)
+
 
 if __name__ == "__main__":
     if opt.ddp:

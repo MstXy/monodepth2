@@ -68,7 +68,7 @@ class MonodepthOptions:
         # ===== upflow settings
         self.parser.add_argument("--photo_loss_use_occ",
                                 type=str2bool,
-                                default='false')
+                                default='True')
         
         
         
@@ -99,7 +99,7 @@ class MonodepthOptions:
                                  default=None)
         
         self.parser.add_argument("--flow_occ_check",
-                                 default=False,
+                                 default=True,
                                  type=bool)
 
         self.parser.add_argument("--depth_branch",
