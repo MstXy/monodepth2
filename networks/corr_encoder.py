@@ -133,3 +133,46 @@ class CorrEncoder(BasicEncoder):
                 outs['level' + str(i + 3)] = x
 
         return outs
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

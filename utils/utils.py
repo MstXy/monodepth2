@@ -18,12 +18,11 @@ import torchvision
 import flow_vis
 
 class InputPadder:
-    """ Pads images such that dimensions are divisible by 8 """
-
-    def __init__(self, dims, mode='sintel'):
+    """ Pads images such that dimensions are divisible by 'divided_by' :int """
+    def __init__(self, dims, mode='sintel', divided_by=8):
         self.ht, self.wd = dims[-2:]
-        pad_ht = (((self.ht // 8) + 1) * 8 - self.ht) % 8
-        pad_wd = (((self.wd // 8) + 1) * 8 - self.wd) % 8
+        pad_ht = (((self.ht // divided_by) + 1) * divided_by - self.ht) % divided_by
+        pad_wd = (((self.wd // divided_by) + 1) * divided_by - self.wd) % divided_by
         if mode == 'sintel':
             self._pad = [pad_wd // 2, pad_wd - pad_wd // 2, pad_ht // 2, pad_ht - pad_ht // 2]
         else:
@@ -31,6 +30,7 @@ class InputPadder:
 
     def pad(self, *inputs):
         return [F.pad(x, self._pad, mode='replicate') for x in inputs]
+        #  padding for the left, top, right and bottom borders respectively
 
     def unpad(self, x):
         ht, wd = x.shape[-2:]

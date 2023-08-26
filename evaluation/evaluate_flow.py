@@ -6,15 +6,18 @@ import argparse
 import os
 import numpy as np
 import torch
+import torchvision.utils as tvu
+import torchvision.transforms.functional as F
 import imageio
 
-# from network import RAFTGMA
 
-import datasets.flow_eval_datasets as datasets
-import flow_viz
-from utils import frame_utils
 
-from utils.utils import InputPadder, forward_interpolate
+import monodepth2.datasets.flow_eval_datasets as datasets
+
+from monodepth2.utils import frame_utils
+
+from monodepth2.utils.utils import InputPadder, forward_interpolate
+import monodepth2.utils.utils as mono_utils
 
 
 @torch.no_grad()
@@ -69,7 +72,7 @@ def create_sintel_submission_vis(model, warm_start=False, output_path='sintel_su
             flow = padder.unpad(flow_pr[0]).permute(1, 2, 0).cpu().numpy()
 
             # Visualizations
-            flow_img = flow_viz.flow_to_image(flow)
+            flow_img = tvu.flow_to_image(flow)
             image = Image.fromarray(flow_img)
             if not os.path.exists(f'vis_test/RAFT/{dstype}/'):
                 os.makedirs(f'vis_test/RAFT/{dstype}/flow')
@@ -207,8 +210,9 @@ def validate_things(model, iters=6):
     return results
 
 
+
 @torch.no_grad()
-def validate_sintel(model, iters=6):
+def validate_sintel(model, inference_func):
     """ Peform validation using the Sintel (train) split """
     model.eval()
     results = {}
@@ -224,8 +228,9 @@ def validate_sintel(model, iters=6):
             padder = InputPadder(image1.shape)
             image1, image2 = padder.pad(image1, image2)
 
-            _, flow_pr = model(image1, image2, iters=iters, test_mode=True)
-            flow = padder.unpad(flow_pr[0]).cpu()
+            flow_1_2 = inference_func(model, image1, image2)
+
+            flow = padder.unpad(flow_1_2).cpu()
 
             epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
             epe_list.append(epe.view(-1).numpy())
@@ -344,11 +349,13 @@ def separate_inout_sintel_occ():
 
 
 
+
 @torch.no_grad()
-def validate_kitti(model):
+def validate_kitti(model, inference_func):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
-    val_dataset = datasets.KITTI(split='training')
+    val_dataset = datasets.KITTI(split='training',
+                                 root='/home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/data_scene_flow')
 
     out_list, epe_list = [], []
     for val_id in range(len(val_dataset)):
@@ -356,22 +363,22 @@ def validate_kitti(model):
         image1 = image1[None].cuda()
         image2 = image2[None].cuda()
 
-        padder = InputPadder(image1.shape, mode='kitti')
+        padder = InputPadder(image1.shape, mode='kitti', divided_by=64)
         image1, image2 = padder.pad(image1, image2)
 
-        _, flow_pr = model(image1, image2, test_mode=True)
-        flow = padder.unpad(flow_pr[0]).cpu()
-
+        flow_1_2 = inference_func(model, image1, image2)
+        # mono_utils.stitching_and_show(img_list=[flow_1_2], show=True)
+        flow = padder.unpad(flow_1_2).cpu()
         epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
         mag = torch.sum(flow_gt**2, dim=0).sqrt()
 
         epe = epe.view(-1)
         mag = mag.view(-1)
         val = valid_gt.view(-1) >= 0.5
-
         out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
         epe_list.append(epe[val].mean().item())
         out_list.append(out[val].cpu().numpy())
+        print("epe[val].mean().item()", epe[val].mean().item(), "out[val].cpu().numpy()", out[val].cpu().numpy())
 
     epe_list = np.array(epe_list)
     out_list = np.concatenate(out_list)
@@ -382,8 +389,8 @@ def validate_kitti(model):
     print("Validation KITTI: %f, %f" % (epe, f1))
     return {'kitti_epe': epe, 'kitti_f1': f1}
 
-
-if __name__ == '__main__':
+def evaluate_RAFTGMA():
+    # from network import RAFTGMA
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', help="restore checkpoint")
     parser.add_argument('--dataset', help="dataset for evaluation")
@@ -422,6 +429,11 @@ if __name__ == '__main__':
     # create_kitti_submission(model)
     # create_kitti_submission_vis(model)
 
+    def RAFTGMA_inference_func(model, image1, image2):
+        _, flow_pr = model(image1, image2, iters=args.iters, test_mode=True)
+        return flow_pr[0]
+
+
     with torch.no_grad():
         if args.dataset == 'chairs':
             validate_chairs(model.module, iters=args.iters)
@@ -430,10 +442,46 @@ if __name__ == '__main__':
             validate_things(model.module, iters=args.iters)
 
         elif args.dataset == 'sintel':
-            validate_sintel(model.module, iters=args.iters)
+            validate_sintel(model.module, RAFTGMA_inference_func)
 
         elif args.dataset == 'sintel_occ':
             validate_sintel_occ(model.module, iters=args.iters)
 
         elif args.dataset == 'kitti':
-            validate_kitti(model.module, iters=args.iters)
+            validate_kitti(model.module, RAFTGMA_inference_func)
+
+
+
+def evaluate_flow_MonoFlow(flow_branch='flownet'):
+    from monodepth2.networks.MonoFlowNet import MonoFlowNet
+    from monodepth2.options import MonodepthOptions
+    options = MonodepthOptions()
+    opt = options.parse()
+    opt.depth_branch = False
+    opt.optical_flow = flow_branch  # or 'upflow'
+    opt.batch_size = 1
+
+    model = MonoFlowNet(opt)
+    checkpoint_path ='/home/liu/data16t/Projects/test0618_basedON0616/' \
+                    'monodepth2/networks/log/2023-08-21_13-05-33/mdp/models/weights_98plus29plus86/momoFlow.pth'
+    print('loading from', checkpoint_path)
+    model.load_state_dict(torch.load(checkpoint_path))
+    model.cuda()
+
+    def MonoFlow_inference_func(model, image1, image2):
+        input_dict = {}
+        # image1 = F.resize(image1, size=[192, 640], antialias=False)
+        # image2 = F.resize(image2, size=[192, 640], antialias=False)
+        input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+            image1, image2, image1
+        out_dict = model(input_dict)
+        flow_1_2 = out_dict['flow_fwd'][0][0]
+        return flow_1_2
+
+    validate_kitti(model, MonoFlow_inference_func)
+
+
+
+
+if __name__ == '__main__':
+    evaluate_flow_MonoFlow()

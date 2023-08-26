@@ -9,9 +9,13 @@ import torch
 import torch.nn as nn
 import monodepth2.networks as networks
 from monodepth2.layers import *
+import monodepth2.utils.utils as mono_utils
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+initial_opt = options.parse()
 
 class MonoFlowNet(nn.Module):
-    def __init__(self, opt):
+    def __init__(self, opt=initial_opt):
         super(MonoFlowNet, self).__init__()
         # configs
         self.opt = opt
@@ -49,6 +53,7 @@ class MonoFlowNet(nn.Module):
         features = {}
         for i, k in enumerate(self.opt.frame_ids):
             features[k] = [f[i] for f in all_features]
+
         if self.opt.depth_branch:
             outputs.update(self.DepthDecoder(features[0]))
             outputs.update(self.predict_poses(inputs, features))
@@ -69,6 +74,9 @@ class MonoFlowNet(nn.Module):
         '''
         corr_1_2 = self.Corr(feature_1[self.corr_feature_level], feature_2[self.corr_feature_level])
         mod_1 = {"level" + str(i): feature_1[i] for i in range(1, len(feature_1))}
+        # features have 5 levels in total: level_0(W/2 * H/2) to level_4(W/32, H/32), level_negtive_1 is the initial input size(W, H)
+        # mod_1 have 4 levels: level_1(W/4 * H/4) to level_4(W/32, H/32)
+
         flow_1_2 = self.FlowDecoder(mod_1, corr_1_2)
         return flow_1_2
 

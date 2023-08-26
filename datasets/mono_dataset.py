@@ -205,7 +205,6 @@ class MonoDataset(data.Dataset):
                 del inputs[("color", im, -1)]
 
 
-
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)
             inputs["depth_gt"] = np.expand_dims(depth_gt, 0)

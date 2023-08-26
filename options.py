@@ -1,19 +1,18 @@
 # Copyright Niantic 2019. Patent Pending. All rights reserved.
-#
 # This software is licensed under the terms of the Monodepth2 licence
 # which allows for non-commercial use only, the full terms of which are made
 # available in the LICENSE file.
 
 from __future__ import absolute_import, division, print_function
-
 import os
 import argparse
 from datetime import datetime
-
 file_dir = os.path.dirname(__file__)  # the directory that options.py resides in
+
 
 def str2bool(stri_):
     return True if stri_.lower() == 'true' else False
+
 
 class MonodepthOptions:
     def __init__(self):

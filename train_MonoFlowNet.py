@@ -26,7 +26,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 import torch.multiprocessing as mp
 
-# monodepth module import
+# ==== monodepth module import
 import monodepth2.datasets as datasets
 import monodepth2.utils.utils as mono_utils
 from monodepth2.UPFlow_pytorch.utils.tools import tools as uptools
@@ -38,7 +38,7 @@ options = MonodepthOptions()
 opt = options.parse()
 fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
 
-IF_DEBUG = True
+IF_DEBUG = False
 if IF_DEBUG:
     opt.batch_size = 3
     opt.num_workers = 0
@@ -86,7 +86,6 @@ class MonoFlowLoss():
     def __init__(self):
         self.opt = opt
         self.num_scales = len(self.opt.scales)
-
         self.backproject_depth = {}
         self.project_3d = {}
         for scale in self.opt.scales:
@@ -591,13 +590,14 @@ class DDP_Trainer():
 
         #################### model, optim, loss, loding and saving ####################
         self.model = MonoFlowNet(opt)
+        self.model_optimizer = optim.Adam(self.model.parameters(), self.opt.learning_rate)
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
             self.ddp_model = DDP(self.model.to(self.gpu_id), device_ids=[self.gpu_id], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to(self.gpu_id)
-        self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
+
         # self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, self.opt.scheduler_step_size, 0.4)
         self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.model_optimizer,
                                                                        T_max=self.opt.num_epochs/2,
@@ -616,17 +616,6 @@ class DDP_Trainer():
             self.save_opts()
             print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using: device cuda:", self.gpu_id)
-
-    def save_opts(self):
-        """Save options to disk so we know what we ran this experiment with
-        """
-        models_dir = os.path.join(self.log_path, "models")
-        if not os.path.exists(models_dir):
-            os.makedirs(models_dir)
-        to_save = self.opt.__dict__.copy()
-
-        with open(os.path.join(models_dir, 'opt.json'), 'w') as f:
-            json.dump(to_save, f, indent=2)
 
     def load_ddp_model(self):
         """Load model(s) from disk

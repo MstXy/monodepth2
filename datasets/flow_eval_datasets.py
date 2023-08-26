@@ -4,21 +4,22 @@ import numpy as np
 import torch
 import torch.utils.data as data
 import torch.nn.functional as F
-
 import os
 import math
 import random
 from glob import glob
 import os.path as osp
 
-from utils import frame_utils
-from utils.augmentor import FlowAugmentor, SparseFlowAugmentor
-
+import monodepth2.utils.utils
+from monodepth2.utils import frame_utils
+from monodepth2.utils.augmentor import FlowAugmentor, SparseFlowAugmentor
+from torchvision.transforms import Normalize
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
         self.augmentor = None
         self.sparse = sparse
+        self.norm_trans = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
         if aug_params is not None:
             if sparse:
                 self.augmentor = SparseFlowAugmentor(**aug_params)
@@ -35,7 +36,6 @@ class FlowDataset(data.Dataset):
         self.seg_inv_list = None
 
     def __getitem__(self, index):
-
         if self.is_test:
             img1 = frame_utils.read_gen(self.image_list[index][0])
             img2 = frame_utils.read_gen(self.image_list[index][1])
@@ -82,8 +82,8 @@ class FlowDataset(data.Dataset):
         img2 = frame_utils.read_gen(self.image_list[index][1])
 
         flow = np.array(flow).astype(np.float32)
-        img1 = np.array(img1).astype(np.uint8)
-        img2 = np.array(img2).astype(np.uint8)
+        img1 = np.array(img1).astype(np.float32)
+        img2 = np.array(img2).astype(np.float32)
 
         # grayscale images
         if len(img1.shape) == 2:
@@ -99,8 +99,8 @@ class FlowDataset(data.Dataset):
             else:
                 img1, img2, flow = self.augmentor(img1, img2, flow)
 
-        img1 = torch.from_numpy(img1).permute(2, 0, 1).float()
-        img2 = torch.from_numpy(img2).permute(2, 0, 1).float()
+        img1 = torch.from_numpy(img1).permute(2, 0, 1).float() / 255
+        img2 = torch.from_numpy(img2).permute(2, 0, 1).float() / 255
         flow = torch.from_numpy(flow).permute(2, 0, 1).float()
 
         if valid is not None:
@@ -125,7 +125,7 @@ class FlowDataset(data.Dataset):
 
 
 class MpiSintel(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/home/zac/data/Sintel', dstype='clean',
+    def __init__(self, aug_params=None, split='training', root='/home/liu/data16t/datasets/MpiSintel/MPI-Sintel-complete', dstype='clean',
                  occlusion=False, segmentation=False):
         super(MpiSintel, self).__init__(aug_params)
         flow_root = osp.join(root, split, 'flow')

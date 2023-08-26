@@ -425,7 +425,6 @@ class FlowNetCDecoder(FlowNetSDecoder):
     def forward(self, feat1: Dict[str, torch.Tensor],
                 corr_feat: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Forward function for decoder of FlowNetS.
-
         Args:
             feat1 (Dict[str, Tensor]): Input feature pyramid which is encoded
                 image1.
@@ -453,14 +452,13 @@ class FlowNetCDecoder(FlowNetSDecoder):
             # print('level',self.decoders[level])
             flow_pred[level] = upflow
 
-
         #upsample flow to original size
         for level in self.flow_levels:
-            if level != self.start_level and level=='level2': # TODO: use other layer outputs
+            if level != self.start_level and level == 'level2':  # TODO: use other layer outputs
                 scale_factor = 192//flow_pred[level].shape[2]
                 flow_pred[level+"_upsampled"] = F.interpolate(
                     flow_pred[level],
-                    scale_factor=scale_factor,
+                    scale_factor=2,
                     mode='bilinear',
                     align_corners=False)
                 flow_pred[level+"_upsampled"] = self.conv2(self.conv1(flow_pred[level+"_upsampled"]))
