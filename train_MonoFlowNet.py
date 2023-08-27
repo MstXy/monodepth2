@@ -34,6 +34,7 @@ import monodepth2.networks as networks
 from monodepth2.layers import *
 from monodepth2.options import MonodepthOptions
 from monodepth2.networks.MonoFlowNet import MonoFlowNet
+from monodepth2.networks.UnFlowNet import UnFlowNet
 options = MonodepthOptions()
 opt = options.parse()
 fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
@@ -166,20 +167,22 @@ class MonoFlowLoss():
         # ===== occ_1_2, occ_2_1:
         if opt.flow_occ_check:
             occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1)
-
-        # ===== photo loss calculation:
+        else:
+            occ_1_2 = torch.ones_like(flow_1_2[:, 0, :, :]).unsqueeze(dim=1)
+            occ_2_1 = occ_1_2
+            # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=True) + \
+                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=True)
+                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
         photo_loss_ssim = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=True) + \
+                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=True)
+                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
 
         # l1_plus_ssmi = self.l1_plus_ssmi(img1, img1_warped, occ_1_2, alpha=0.85)
 
@@ -207,7 +210,7 @@ class MonoFlowLoss():
         occ_dict = {}
         f_warped_dict = {}
         total_loss = 0
-        if self.opt.optical_flow in ['flownet', ]:
+        if self.opt.optical_flow:
             # compute flow losses, warp img, calculate occ map
 
             # prev(-1) to curr(0)
@@ -241,10 +244,10 @@ class MonoFlowLoss():
             losses["flow_loss"] = losses["photo_loss_l1"] + losses["photo_loss_ssim"]  # + ...
             total_loss += losses["flow_loss"]
 
-        if self.opt.optical_flow in ['upflow']:
-            self.flow_warp(inputs, outputs)
-            total_loss += outputs['loss_by_upflow']
-            raise NotImplementedError
+        # if self.opt.optical_flow in ['upflow']:
+        #     self.flow_warp(inputs, outputs)
+        #     total_loss += outputs['loss_by_upflow']
+        #     raise NotImplementedError
         
         if self.opt.depth_branch:
             for scale in self.opt.scales:
@@ -586,10 +589,16 @@ class DDP_Trainer():
             s = 2 ** i
             self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
                                                # interpolation=Image.ANTIALIAS)
+        self.norm_trans = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
 
 
         #################### model, optim, loss, loding and saving ####################
-        self.model = MonoFlowNet(opt)
+        if self.opt.model_name == "MonoFlowNet":
+            self.model = MonoFlowNet(opt)
+        elif self.opt.model_name == "UnFlowNet":
+            self.model = UnFlowNet()
+
+
         self.model_optimizer = optim.Adam(self.model.parameters(), self.opt.learning_rate)
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
@@ -756,16 +765,16 @@ class DDP_Trainer():
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
-
         self.set_train()
 
     def preprocess(self, inputs):
         """Resize colour images to the required scales and augment if required
-
-                We create the color_aug object in advance and apply the same augmentation to all
-                images in this item. This ensures that all images input to the pose network receive the
-                same augmentation.
-                """
+        We create the color_aug object in advance and apply the same augmentation to all
+        images in this item. This ensures that all images input to the pose network receive the
+        same augmentation.
+        todo:
+        https://stackoverflow.com/questions/65447992/pytorch-how-to-apply-the-same-random-transformation-to-multiple-image
+        """
         color_aug = transforms.ColorJitter(
             self.brightness, self.contrast, self.saturation, self.hue)
         for k in list(inputs):
@@ -773,19 +782,26 @@ class DDP_Trainer():
             if "color" in k:
                 n, im, _ = k
                 for i in range(1, self.num_scales):
-                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
+                    if opt.norm_trans:
+                        inputs[(n, im, i)] = self.norm_trans(
+                            self.resize[i](inputs[(n, im, i - 1)])
+                        )
+                    else:
+                        inputs[(n, im, i)] =self.resize[i](inputs[(n, im, i - 1)])
+
 
         for k in list(inputs):
             f = inputs[k]
             if "color" in k:
                 n, im, i = k
                 # inputs[(n, im, i)] = (self.to_tensor(f))
-                inputs[(n + "_aug", im, i)] = color_aug(f)
+                inputs[(n + "_aug", im, i)] = f
 
         # for j in range(inputs['color_aug', -1, 0].size()[0]):
         #     mono_utils.stitching_and_show(img_list=[
-        #         inputs['color', -1, 0][j],
-        #         inputs['color', 0, 0][j],
+        #         inputs['color_aug', -1, 0][j],
+        #         inputs['color_aug', 0, 0][j],
+        #         inputs['color_aug', 1, 0][j],
         #     ], ver=True, show=True)
 
     def _run_batch(self, inputs, batch_idx):
@@ -818,6 +834,8 @@ class DDP_Trainer():
         self.step = 0
         for epoch in range(self.opt.num_epochs):
             self.epoch = epoch
+            if self.epoch > 10:
+                opt.flow_occ_check = True
             self._run_epoch()
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:

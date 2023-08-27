@@ -636,7 +636,6 @@ class tools():
 
         @classmethod
         def torch_outgoing_occ_check(cls, flow):
-
             B, C, H, W = flow.size()
             # mesh grid
             xx = torch.arange(0, W).view(1, -1).repeat(H, 1)

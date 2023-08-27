@@ -279,7 +279,10 @@ def stitching_and_show(img_list, ver=False, show=True):
     Returns:
     '''
     torch_to_pil = torchvision.transforms.ToPILImage()
-    C, H, W = img_list[0].size()
+    if isinstance(img_list[0], torch.Tensor):
+        C, H, W = img_list[0].size()
+    else:
+        C, H, W = img_list[0].shape
     img_num = len(img_list)
     if not ver:
         stitching = Image.new('RGB', (img_num * W, H))

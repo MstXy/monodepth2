@@ -49,6 +49,10 @@ class MonodepthOptions:
                                  help="models to load",
                                  default=["encoder", "depth", "pose", "corr", "flow"])
 
+        self.parser.add_argument("--model_name",
+                                 type=str,
+                                 help="the name of the folder to save the model in",
+                                 default="MonoFlowNet")  # MonoFlowNet or UnFlowNet
 
         # ==== ddp settings
         self.parser.add_argument("--ddp",
@@ -64,13 +68,7 @@ class MonodepthOptions:
                                  type=int,
                                  help="number of dataloader workers",
                                  default=15)
-        # ===== upflow settings
-        self.parser.add_argument("--photo_loss_use_occ",
-                                type=str2bool,
-                                default='True')
-        
-        
-        
+
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",
                                  type=int,
@@ -94,12 +92,16 @@ class MonodepthOptions:
                                  type=str,
                                  help="optical flow model",
                                  # default="upflow")
-                                #  default="flownet")
+                                 # default="flownet")
                                  default=None)
-        
+
         self.parser.add_argument("--flow_occ_check",
-                                 default=True,
+                                 default=False,
                                  type=bool)
+
+        self.parser.add_argument("--norm_trans",
+                                 type=str2bool,
+                                 default='False')
 
         self.parser.add_argument("--depth_branch",
                                  type=str2bool,
@@ -113,10 +115,7 @@ class MonodepthOptions:
                                  type=str,
                                  default='cuda:0'
                                  )
-        self.parser.add_argument("--model_name",
-                                 type=str,
-                                 help="the name of the folder to save the model in",
-                                 default="mdp")
+
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",

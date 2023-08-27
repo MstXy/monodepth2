@@ -378,7 +378,7 @@ def validate_kitti(model, inference_func):
         out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
         epe_list.append(epe[val].mean().item())
         out_list.append(out[val].cpu().numpy())
-        print("epe[val].mean().item()", epe[val].mean().item(), "out[val].cpu().numpy()", out[val].cpu().numpy())
+        print("epe[val].mean().item()", epe[val].mean().item(), "out[val].cpu().numpy()", np.mean(out[val].cpu().numpy()))
 
     epe_list = np.array(epe_list)
     out_list = np.concatenate(out_list)
@@ -462,8 +462,10 @@ def evaluate_flow_MonoFlow(flow_branch='flownet'):
     opt.batch_size = 1
 
     model = MonoFlowNet(opt)
-    checkpoint_path ='/home/liu/data16t/Projects/test0618_basedON0616/' \
-                    'monodepth2/networks/log/2023-08-21_13-05-33/mdp/models/weights_98plus29plus86/momoFlow.pth'
+    # checkpoint_path ='/home/liu/data16t/Projects/test0618_basedON0616/' \
+    #                 'monodepth2/networks/log/2023-08-21_13-05-33/mdp/models/weights_98plus29plus86/momoFlow.pth'
+    checkpoint_path = '/home/liu/data16t/Projects/test0618_basedON0616/monodepth2/' \
+                      'networks/log/2023-08-21_13-05-33/mdp/models/weights_65/momoFlow.pth'
     print('loading from', checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path))
     model.cuda()
