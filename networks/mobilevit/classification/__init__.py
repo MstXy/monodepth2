@@ -70,7 +70,7 @@ def build_classification_model(opts, *args, **kwargs):
     pretrained = getattr(opts, "model.classification.pretrained", None)
     if pretrained is not None:
         pretrained = get_local_path(opts, path=pretrained)
-        model = load_pretrained_model(model=model, wt_loc=pretrained, is_master_node=is_master_node)
+        model = load_pretrained_model(model=model, wt_loc=pretrained, is_master_node=is_master_node, num_input_images=getattr(opts, "model.classification.num_input", 1))
 
     freeze_norm_layers = getattr(opts, "model.classification.freeze_batch_norm", False)
     if freeze_norm_layers:

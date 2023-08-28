@@ -25,7 +25,12 @@ class MobileViTv3(BaseEncoder):
         classifier_dropout = getattr(opts, "model.classification.classifier_dropout", 0.2)
 
         pool_type = getattr(opts, "model.layer.global_pool", "mean")
-        image_channels = 3
+
+        num_input_images = getattr(opts, "model.classification.num_input", 1)
+        if num_input_images == 1:
+            image_channels = 3
+        else:
+            image_channels = 3 * num_input_images
         out_channels = 16
 
         mobilevit_config = get_configuration(opts=opts)

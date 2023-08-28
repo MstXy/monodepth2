@@ -13,7 +13,7 @@ import numpy as np
 
 class MobileViT(nn.Module):
 
-    def __init__(self, parser, pretrained=True) -> None:
+    def __init__(self, parser, pretrained=True, num_input_images=1) -> None:
         super(MobileViT, self).__init__()
         
 
@@ -33,6 +33,9 @@ class MobileViT(nn.Module):
         group.add_argument('--ddp.rank', type=int, default=0)
         opts = parser.parse_args()
         opts = load_config_file(opts)
+
+        # num_input_image:
+        if num_input_images == 2: setattr(opts, "model.classification.num_input", 2)
 
         # pretrained
         if pretrained: setattr(opts, "model.classification.pretrained", PRETRAIN_PATH)

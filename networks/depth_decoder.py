@@ -105,6 +105,7 @@ class DepthDecoder(nn.Module):
             if self.updown and i in [4,3,2]:
                 self.convs[("down_conv", i)] = Conv3x3(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
                 # self.convs[("down_conv", i)] = SeparableConv(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
+                # self.convs[("down_conv", i)] = SeparableConv(self.num_ch_enc[i-2], 64, stride=2)
 
             # depth_att
             if self.depth_att:
@@ -113,6 +114,7 @@ class DepthDecoder(nn.Module):
                     num_ch_in += self.num_ch_enc[i - 1]
                     if self.updown and i in [4,3,2]:
                         num_ch_in += self.num_ch_dec[i - 1]//2
+                        # num_ch_in += 64
                     self.convs[("att", i)] = ChannelAttention(num_ch_in)
                 # self.convs[("att", i)] = SpatialAttention()
                 # self.convs[("att", i)] = CS_Block(num_ch_in)
@@ -168,6 +170,7 @@ class DepthDecoder(nn.Module):
             #     num_ch_in += 1
             if self.updown and i in [4,3,2]:
                 num_ch_in += self.num_ch_dec[i - 1]//2
+                # num_ch_in += 64
             num_ch_out = self.num_ch_dec[i]
             self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 

@@ -8,7 +8,7 @@ import os
 from networks.mobilevit.utils import logger
 
 
-def load_pretrained_model(model, wt_loc, is_master_node: bool = False):
+def load_pretrained_model(model, wt_loc, is_master_node: bool = False, num_input_images=1):
     if not os.path.isfile(wt_loc):
         logger.error('Pretrained file is not found here: {}'.format(wt_loc))
 
@@ -16,7 +16,12 @@ def load_pretrained_model(model, wt_loc, is_master_node: bool = False):
     if hasattr(model, "module"):
         model.module.load_state_dict(wts)
     else:
-        model.load_state_dict(wts)
+        if num_input_images != 1:
+            print("loaded multi-image input")
+            wts['conv_1.block.conv.weight'] = torch.cat(
+                [wts['conv_1.block.conv.weight']] * num_input_images, 1) / num_input_images
+        else:
+            model.load_state_dict(wts)
 
     if is_master_node:
         logger.log('Pretrained weights are loaded from {}'.format(wt_loc))

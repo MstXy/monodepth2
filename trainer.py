@@ -8,6 +8,7 @@ from __future__ import absolute_import, division, print_function
 
 import numpy as np
 import time
+import copy
 
 import torch
 import torch.nn.functional as F
@@ -34,6 +35,8 @@ from IPython import embed
 
 class Trainer:
     def __init__(self, options, parser=None):
+        alt_parser = copy.deepcopy(parser)
+
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
@@ -44,7 +47,7 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 5 # change for # of GPU
+        self.DEVICE_NUM = 7 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
 
         self.num_scales = len(self.opt.scales)
@@ -187,6 +190,16 @@ class Trainer:
                     self.opt.num_layers,
                     self.opt.weights_init == "pretrained",
                     num_input_images=self.num_pose_frames)
+
+                self.models["pose_encoder"].to(self.device)
+                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+
+                self.models["pose"] = networks.PoseDecoder(
+                    self.models["pose_encoder"].num_ch_enc,
+                    num_input_features=1,
+                    num_frames_to_predict_for=2)
+            elif self.opt.pose_model_type == "separate_backbone":
+                self.models["pose_encoder"] = MobileViT(alt_parser, num_input_images=self.num_pose_frames)
 
                 self.models["pose_encoder"].to(self.device)
                 self.parameters_to_train += list(self.models["pose_encoder"].parameters())
@@ -531,7 +544,7 @@ class Trainer:
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
-                    if self.opt.pose_model_type == "separate_resnet":
+                    if self.opt.pose_model_type == "separate_resnet" or self.opt.pose_model_type == "separate_backbone":
                         pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
                     elif self.opt.pose_model_type == "posecnn":
                         pose_inputs = torch.cat(pose_inputs, 1)
@@ -575,11 +588,11 @@ class Trainer:
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
-            if self.opt.pose_model_type in ["separate_resnet", "posecnn"]:
+            if self.opt.pose_model_type in ["separate_resnet", "posecnn", "separate_backbone"]:
                 pose_inputs = torch.cat(
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if not isinstance(i, str)], 1)
 
-                if self.opt.pose_model_type == "separate_resnet":
+                if self.opt.pose_model_type == "separate_resnet" or self.opt.pose_model_type == "separate_backbone":
                     pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
             elif self.opt.pose_model_type == "shared":
@@ -874,6 +887,9 @@ class Trainer:
                     writer.add_image(
                         "color_{}_{}/{}".format(frame_id, s, j),
                         inputs[("color", frame_id, s)][j].data, self.step)
+                    writer.add_image(
+                        "color_aug_{}_{}/{}".format(frame_id, s, j),
+                        inputs[("color_aug", frame_id, s)][j].data, self.step)
                     if s == 0 and frame_id != 0:
                         writer.add_image(
                             "color_pred_{}_{}/{}".format(frame_id, s, j),

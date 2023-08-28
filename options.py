@@ -98,6 +98,12 @@ class MonodepthOptions:
                                           "mobilevitv3_xs",
                                           "None"])
         # -----------------------------
+      #   # backbone EMA -----------
+      #   self.parser.add_argument("--ema",
+      #                            type=bool,
+      #                            help="EMA encoder weight update",
+      #                            default=True)
+      #   # -----------------------------
         # decoder switch -----------
         self.parser.add_argument("--decoder",
                                  type=str,
@@ -194,7 +200,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=16)
+                                 default=8)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -239,7 +245,7 @@ class MonodepthOptions:
                                  help="normal or shared",
                                  default="separate_resnet",
                                  # default="shared",
-                                 choices=["posecnn", "separate_resnet", "shared"])
+                                 choices=["posecnn", "separate_resnet", "shared", "separate_backbone"])
 
         # SYSTEM options
         self.parser.add_argument("--no_cuda",
