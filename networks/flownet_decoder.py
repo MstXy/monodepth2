@@ -487,3 +487,4 @@ if __name__ == "__main__":
                     dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
                 ])
     print(net)
+

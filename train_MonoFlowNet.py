@@ -598,7 +598,6 @@ class DDP_Trainer():
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet()
 
-
         self.model_optimizer = optim.Adam(self.model.parameters(), self.opt.learning_rate)
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
@@ -649,7 +648,7 @@ class DDP_Trainer():
 
     def save_ddp_model(self):
         save_folder = os.path.join(self.log_path, "models", "weights_{}".format(self.epoch))
-        save_path = os.path.join(save_folder, "momoFlow.pth")
+        save_path = os.path.join(save_folder, "monoFlow.pth")
         if not os.path.exists(save_folder):
             os.makedirs(save_folder, exist_ok=True)
         torch.save(self.ddp_model.state_dict(), save_path)
@@ -748,7 +747,6 @@ class DDP_Trainer():
         Depth evaluation dataset:
             monodepth2/splits/eigen_zhou/val_files.txt
         """
-        self.set_eval()
         if self.opt.depth_branch:
             try:
                 inputs = next(self.val_iter)
@@ -765,7 +763,19 @@ class DDP_Trainer():
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
-        self.set_train()
+        if self.opt.optical_flow:
+            from monodepth2.evaluation.evaluate_flow import evaluate_flow_online
+            with torch.no_grad():
+                eval_flow_result = evaluate_flow_online(
+                    self.log_path,
+                    checkpoint_path=os.path.join(self.log_path, "models", "weights_{}".format(self.epoch), "monoFlow.pth"),
+                    model_name=self.opt.model_name,
+                    epoch_idx=self.epoch,
+                    opt_main=self.opt)
+                writer = self.writers['val']
+                writer.add_scalar('kitti_epe', eval_flow_result['kitti_epe'], self.step)
+                writer.add_scalar('kitti_f1', eval_flow_result['kitti_f1'], self.step)
+
 
     def preprocess(self, inputs):
         """Resize colour images to the required scales and augment if required
@@ -788,7 +798,6 @@ class DDP_Trainer():
                         )
                     else:
                         inputs[(n, im, i)] =self.resize[i](inputs[(n, im, i - 1)])
-
 
         for k in list(inputs):
             f = inputs[k]
@@ -831,19 +840,15 @@ class DDP_Trainer():
 
     def train(self, ):
         self.start_time = time.time()
-        self.step = 0
-        for epoch in range(self.opt.num_epochs):
+        for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
-            if self.epoch > 10:
+            if self.epoch > self.opt.occ_start_epoch:
                 opt.flow_occ_check = True
             self._run_epoch()
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:
-                # self.val()
-                # todo: eval flow
-                # if self.opt.optical_flow:
-                #     self.kitti_val_result = self.val_flow()
                 self.save_ddp_model()
+                self.eval()
 
 
 def ddp_setup(rank, world_size):

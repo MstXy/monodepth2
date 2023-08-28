@@ -28,7 +28,7 @@ class MonodepthOptions:
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join("./log",
+                                 default=os.path.join(os.path.dirname(os.path.dirname(file_dir)), 'mono_log',
                                                       datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
         self.parser.add_argument("--val_data_root",
                                  type=str,
@@ -78,6 +78,10 @@ class MonodepthOptions:
                                  type=float,
                                  help="learning rate",
                                  default=1e-4)
+        self.parser.add_argument("--start_epoch",
+                                 type=int,
+                                 help="start_epoch",
+                                 default=0)
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
@@ -92,12 +96,16 @@ class MonodepthOptions:
                                  type=str,
                                  help="optical flow model",
                                  # default="upflow")
-                                 # default="flownet")
-                                 default=None)
+                                 default="flownet")
+                                 # default=None)
 
         self.parser.add_argument("--flow_occ_check",
                                  default=False,
                                  type=bool)
+
+        self.parser.add_argument("--occ_start_epoch",
+                                 type=int,
+                                 default=10)
 
         self.parser.add_argument("--norm_trans",
                                  type=str2bool,

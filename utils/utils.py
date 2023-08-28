@@ -282,7 +282,7 @@ def stitching_and_show(img_list, ver=False, show=True):
     if isinstance(img_list[0], torch.Tensor):
         C, H, W = img_list[0].size()
     else:
-        C, H, W = img_list[0].shape
+        raise TypeError("Not tensor type")
     img_num = len(img_list)
     if not ver:
         stitching = Image.new('RGB', (img_num * W, H))
@@ -316,6 +316,10 @@ def img_diff_show(img1:torch.Tensor, img2:torch.Tensor):
     diff = torch.unsqueeze(torch.sum(torch.abs(img1 - img2), dim=0), dim=0)
     return diff
 
+def plt_color_map_to_tensor(plt_color_map):
+    array = (plt_color_map[:, :, :3] * 255).astype(np.uint8).transpose((2, 0, 1))
+    tensor = torch.Tensor(array)
+    return tensor
 
 def add_img_weighted(img1, img2, alpha1=0.5):
     assert type(img1) == type(img2)
