@@ -167,10 +167,11 @@ class MonoFlowLoss():
         # ===== occ_1_2, occ_2_1:
         if opt.flow_occ_check:
             occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1)
+            occ_1_2, occ_2_1 = occ_1_2.copy().detach(), occ_2_1.copy().detach()
         else:
             occ_1_2 = torch.ones_like(flow_1_2[:, 0, :, :]).unsqueeze(dim=1)
             occ_2_1 = occ_1_2
-            # ===== photo loss calculation:
+        # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
@@ -435,7 +436,6 @@ class MonoFlowLoss():
         ssim_sum = self.ssim(img1_warped, img1)
         ssim_loss = torch.sum(ssim_sum * occ_1_2) / (torch.sum(ssim_sum) + 1e-6)
         return alpha * ssim_loss + (1-alpha) * l1_loss
-
 
     def depth_evaluation(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
@@ -776,7 +776,6 @@ class DDP_Trainer():
                 writer.add_scalar('kitti_epe', eval_flow_result['kitti_epe'], self.step)
                 writer.add_scalar('kitti_f1', eval_flow_result['kitti_f1'], self.step)
 
-
     def preprocess(self, inputs):
         """Resize colour images to the required scales and augment if required
         We create the color_aug object in advance and apply the same augmentation to all
@@ -899,7 +898,6 @@ def main(rank: int, world_size: int):
     trainer = DDP_Trainer(gpu_id=rank, train_loader=train_loader)
     trainer.train()
     destroy_process_group()
-
 
 
 #############################         test          ###############################
