@@ -101,7 +101,7 @@ class MonodepthOptions:
 
         self.parser.add_argument("--flow_occ_check",
                                  default=False,
-                                 type=bool)
+                                 type=str2bool)
 
         self.parser.add_argument("--occ_start_epoch",
                                  type=int,

@@ -171,7 +171,7 @@ class MonoFlowLoss():
                 occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
             occ_1_2 = torch.ones_like(flow_1_2[:, 0, :, :]).unsqueeze(dim=1)
-            occ_2_1 = occ_1_2
+            occ_2_1 = occ_1_2.clone().detach()
         # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
