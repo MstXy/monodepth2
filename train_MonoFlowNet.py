@@ -167,7 +167,8 @@ class MonoFlowLoss():
         # ===== occ_1_2, occ_2_1:
         if opt.flow_occ_check:
             occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1)
-            occ_1_2, occ_2_1 = occ_1_2.copy().detach(), occ_2_1.copy().detach()
+            if opt.stop_occ_gradient:
+                occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
             occ_1_2 = torch.ones_like(flow_1_2[:, 0, :, :]).unsqueeze(dim=1)
             occ_2_1 = occ_1_2
@@ -195,12 +196,16 @@ class MonoFlowLoss():
         #     img=target, pred=flow_fwd)
         # flow_loss += smo_loss
         # 1.2 Second Order smoothness loss
-
+        smo_loss_o1 = self.edge_aware_smoothness_order2(img=img1, pred=flow_1_2) + \
+                   self.edge_aware_smoothness_order2(img=img2, pred=flow_2_1)
+        smo_loss_o2 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
+                   self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
+        smo_loss = smo_loss_o1 + smo_loss_o2
         # ===== census loss calculation:
 
         # ===== multi scale distillation loss calculation:
 
-        flow_loss["smo_loss"] = 0
+        flow_loss["smo_loss"] = smo_loss
         return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
 
     def compute_losses(self, inputs, outputs):
@@ -208,41 +213,42 @@ class MonoFlowLoss():
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
-        occ_dict = {}
-        f_warped_dict = {}
+        losses["smo_loss"] = 0
+        losses["photo_loss_l1"] = 0
+        losses["photo_loss_ssim"] = 0
         total_loss = 0
         if self.opt.optical_flow:
             # compute flow losses, warp img, calculate occ map
+            for scale in self.opt.scales:
+                # prev(-1) to curr(0)
+                flow_loss_1, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                    img1=inputs[("color_aug", -1, scale)],
+                    img2=inputs[("color_aug", 0, scale)],
+                    flow_1_2=outputs[('flow', -1, 0, scale)],  # flow -1 to 0 (flow_prev_to_curr)
+                    flow_2_1=outputs[('flow', 0, -1, scale)],  # flow 0 to -1 (flow_curr_to_prev)
+                    name="prev_curr")
+                outputs[('f_warped', -1, 0, scale)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
+                outputs[('f_warped', 0, -1, scale)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
+                outputs[('occ', -1, 0, scale)] = occ_1_2
+                outputs[('occ', 0, -1, scale)] = occ_2_1
 
-            # prev(-1) to curr(0)
-            flow_loss_1, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
-                img1=inputs["color_aug", -1, 0],
-                img2=inputs["color_aug", 0, 0],
-                flow_1_2=outputs['flow_fwd'][0],
-                flow_2_1=outputs['flow_bwd'][0],
-                name="prev_curr")
-            f_warped_dict[(-1, 0)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
-            f_warped_dict[(0, -1)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
-            occ_dict[(-1, 0)] = occ_1_2
-            occ_dict[(0, -1)] = occ_2_1
+                # curr(0) to next(1)
+                flow_loss_2, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                    img1=inputs["color_aug", 0, scale],
+                    img2=inputs["color_aug", 1, scale],
+                    flow_1_2=outputs[('flow', 0, 1, scale)],  # flow 0 to 1 (flow_curr_to_next)
+                    flow_2_1=outputs[('flow', 1, 0, scale)],  # flow 1 to 0 (flow_next_to_curr)
+                    name="curr_next")
+                outputs[('f_warped', 0, 1, scale)] = img1_warped  # curr_img warped by next_img and flow_curr_to_next
+                outputs[('f_warped', 1, 0, scale)] = img2_warped   # next_img warped by curr_img and flow_next_to_curr
+                outputs[('occ', 0, 1, scale)] = occ_1_2
+                outputs[('occ', 1, 0, scale)] = occ_2_1
 
-            # curr(0) to next(1)
-            flow_loss_2, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
-                img1=inputs["color_aug", 0, 0],
-                img2=inputs["color_aug", 1, 0],
-                flow_1_2=outputs['flow_fwd'][1],
-                flow_2_1=outputs['flow_bwd'][1],
-                name="curr_next")
-            f_warped_dict[(0, 1)] = img1_warped  # curr_img warped by next_img and flow_curr_to_next
-            f_warped_dict[(1, 0)] = img2_warped  # next_img warped by curr_img and flow_next_to_curr
-            occ_dict[(0, 1)] = occ_1_2
-            occ_dict[(1, 0)] = occ_2_1
+                losses["smo_loss"] += flow_loss_1["smo_loss"] + flow_loss_2["smo_loss"]
+                losses["photo_loss_l1"] += flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
+                losses["photo_loss_ssim"] += flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
 
-            losses["smo_loss"] = flow_loss_1["smo_loss"] + flow_loss_2["smo_loss"]
-            losses["photo_loss_l1"] = flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
-            losses["photo_loss_ssim"] = flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
-
-            losses["flow_loss"] = losses["photo_loss_l1"] + losses["photo_loss_ssim"]  # + ...
+            losses["flow_loss"] = losses["photo_loss_l1"] + losses["photo_loss_ssim"] + losses["smo_loss"]
             total_loss += losses["flow_loss"]
 
         # if self.opt.optical_flow in ['upflow']:
@@ -333,7 +339,7 @@ class MonoFlowLoss():
 
         total_loss /= self.num_scales
         losses["loss"] = total_loss
-        return losses, occ_dict, f_warped_dict
+        return losses
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
@@ -367,6 +373,8 @@ class MonoFlowLoss():
         else:
             raise ValueError('wrong photo_loss type: %s' % photo_loss_type)
         if photo_loss_use_occ:
+            tmp = torch.sum(loss_diff[0], dim=0).unsqueeze(0) * occ_weight
+            # mono_utils.stitching_and_show([loss_diff[0], occ_weight[0], tmp[0], torch.sum(loss_diff[0], dim=0).unsqueeze(0)], show=True)
             photo_loss = torch.sum(loss_diff * occ_weight) / (torch.sum(occ_weight) + 1e-6)
         else:
             photo_loss = torch.mean(loss_diff)
@@ -428,6 +436,44 @@ class MonoFlowLoss():
             ssim_d = (mu_x ** 2 + mu_y ** 2 + c1) * (sigma_x + sigma_y + c2)
         result = ssim_n / ssim_d
         return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
+
+    def edge_aware_smoothness_order2(self, img, pred):
+        def gradient_x(img, stride=1):
+            gx = img[:, :, :-stride, :] - img[:, :, stride:, :]
+            return gx
+
+        def gradient_y(img, stride=1):
+            gy = img[:, :, :, :-stride] - img[:, :, :, stride:]
+            return gy
+
+        pred_gradients_x = gradient_x(pred)
+        pred_gradients_xx = gradient_x(pred_gradients_x)
+        pred_gradients_y = gradient_y(pred)
+        pred_gradients_yy = gradient_y(pred_gradients_y)
+        image_gradients_x = gradient_x(img, stride=2)
+        image_gradients_y = gradient_y(img, stride=2)
+        weights_x = torch.exp(-torch.mean(torch.abs(image_gradients_x), 1, keepdim=True))
+        weights_y = torch.exp(-torch.mean(torch.abs(image_gradients_y), 1, keepdim=True))
+        smoothness_x = torch.abs(pred_gradients_xx) * weights_x
+        smoothness_y = torch.abs(pred_gradients_yy) * weights_y
+        return torch.mean(smoothness_x) + torch.mean(smoothness_y)
+
+    def edge_aware_smoothness_order1(self, img, pred):
+        def gradient_x(img):
+            gx = img[:, :, :-1, :] - img[:, :, 1:, :]
+            return gx
+        def gradient_y(img):
+            gy = img[:, :, :, :-1] - img[:, :, :, 1:]
+            return gy
+        pred_gradients_x = gradient_x(pred)
+        pred_gradients_y = gradient_y(pred)
+        image_gradients_x = gradient_x(img)
+        image_gradients_y = gradient_y(img)
+        weights_x = torch.exp(-torch.mean(torch.abs(image_gradients_x), 1, keepdim=True))
+        weights_y = torch.exp(-torch.mean(torch.abs(image_gradients_y), 1, keepdim=True))
+        smoothness_x = torch.abs(pred_gradients_x) * weights_x
+        smoothness_y = torch.abs(pred_gradients_y) * weights_y
+        return torch.mean(smoothness_x) + torch.mean(smoothness_y)
 
     def l1_plus_ssmi(self, img1, img1_warped, occ_1_2, alpha=0.85):
         l1_sum = torch.abs(img1_warped - img1 + 1e-6)
@@ -604,7 +650,7 @@ class DDP_Trainer():
         if opt.ddp:
             self.ddp_model = DDP(self.model.to(self.gpu_id), device_ids=[self.gpu_id], find_unused_parameters=True)
         else:
-            self.ddp_model = self.model.to(self.gpu_id)
+            self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
 
         # self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, self.opt.scheduler_step_size, 0.4)
         self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.model_optimizer,
@@ -632,7 +678,7 @@ class DDP_Trainer():
         assert os.path.isdir(self.opt.load_weights_folder), \
             "Cannot find folder {}".format(self.opt.load_weights_folder)
         print("loading model from folder {}".format(self.opt.load_weights_folder))
-        chechpoint_path = os.path.join(self.opt.load_weights_folder, "momoFlow.pth")
+        chechpoint_path = os.path.join(self.opt.load_weights_folder, "monoFlow.pth")
         self.model.load_state_dict(
             torch.load(chechpoint_path, map_location='cpu'))
 
@@ -674,7 +720,7 @@ class DDP_Trainer():
                                   mono_utils.sec_to_hm_str(time_sofar), mono_utils.sec_to_hm_str(training_time_left),
                                   curr_lr, smo_loss, photo_loss))
 
-    def log(self, mode, inputs, outputs, losses, occ_dict, f_warped_dict):
+    def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
@@ -684,14 +730,14 @@ class DDP_Trainer():
         for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
             if self.opt.optical_flow is not None:
                 # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
-                prev_curr_and_flow = mono_utils.log_vis_1(inputs, outputs, occ_dict, -1, 0, j)
-                curr_next_and_flow = mono_utils.log_vis_1(inputs, outputs, occ_dict, 0, 1, j)
+                prev_curr_and_flow = mono_utils.log_vis_1(inputs, outputs, -1, 0, j)
+                curr_next_and_flow = mono_utils.log_vis_1(inputs, outputs, 0, 1, j)
 
                 # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
                 prev_warped_prev_and_diff = \
-                    mono_utils.log_vis_2(inputs, outputs, occ_dict, -1, 0, f_warped_dict, j)
+                    mono_utils.log_vis_2(inputs, outputs, -1, 0, j)
                 curr_warped_curr_and_diff = \
-                    mono_utils.log_vis_2(inputs, outputs, occ_dict, 0, 1, f_warped_dict, j)
+                    mono_utils.log_vis_2(inputs, outputs, 0, 1, j)
 
                 writer.add_image('1.Curr_2.OccPrevCurr_3.FlowPrevCurr_4.Prev/{}'.format(j),
                                  prev_curr_and_flow, self.step)
@@ -817,7 +863,7 @@ class DDP_Trainer():
         start_batch_time = time.time()
         self.preprocess(inputs)
         outputs = self.ddp_model(inputs)
-        losses, occ_dict, f_warped_dict = self.mono_loss.compute_losses(inputs, outputs)
+        losses = self.mono_loss.compute_losses(inputs, outputs)
         losses['loss'].backward()
         self.model_optimizer.step()
 
@@ -828,7 +874,7 @@ class DDP_Trainer():
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
             if "depth_gt" in inputs and self.opt.depth_branch:
                 self.mono_loss.depth_evaluation(inputs, outputs, losses)
-            self.log("train", inputs, outputs, losses, occ_dict, f_warped_dict)
+            self.log("train", inputs, outputs, losses)
         self.step += 1
 
     def _run_epoch(self):

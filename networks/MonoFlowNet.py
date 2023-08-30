@@ -59,10 +59,7 @@ class MonoFlowNet(nn.Module):
             outputs.update(self.predict_poses(inputs, features))
 
         if self.opt.optical_flow:
-            flow_prev_curr, flow_curr_next, flow_curr_prev, flow_next_curr, loss_by_upflow = self.predict_flow(inputs, features)
-            outputs['loss_by_upflow'] = loss_by_upflow
-            outputs["flow_fwd"] = (flow_prev_curr, flow_curr_next)
-            outputs["flow_bwd"] = (flow_curr_prev, flow_next_curr)
+            outputs.update(self.predict_flow(inputs, features))
         return outputs
 
     def cal_fwd_flownet(self, feature_1, feature_2):
@@ -70,14 +67,13 @@ class MonoFlowNet(nn.Module):
         Args:
             feature_1: feature list of previous img (img_1)
             feature_2: feature list of next img (img_2)
+            scale: flow output scale
         Returns: flow of img1->img2
         '''
         corr_1_2 = self.Corr(feature_1[self.corr_feature_level], feature_2[self.corr_feature_level])
-        mod_1 = {"level" + str(i): feature_1[i] for i in range(1, len(feature_1))}
-        # features have 5 levels in total: level_0(W/2 * H/2) to level_4(W/32, H/32), level_negtive_1 is the initial input size(W, H)
-        # mod_1 have 4 levels: level_1(W/4 * H/4) to level_4(W/32, H/32)
-
-        flow_1_2 = self.FlowDecoder(mod_1, corr_1_2)
+        mod_1 = {"level" + str(i+1): feature_1[i] for i in range(0, len(feature_1))}
+        # features have 5 levels in total: feature_0 is level_1(W/2 * H/2) to level_5(W/32, H/32), level_0 is the initial input size(W, H)
+        flow_1_2 = self.FlowDecoder(mod_1, corr_1_2)  # ['level'+str(scale)]
         return flow_1_2
 
     def cal_fwd_upflow(self, feature_1, feature_2, img_1, img_2):
@@ -90,7 +86,7 @@ class MonoFlowNet(nn.Module):
         Returns: flow_1_2
         '''
         start = np.zeros((1, 2, 1, 1))
-        start = torch.from_numpy(start).float().to(opt.device)
+        start = torch.from_numpy(start).float().to(initial_opt.device)
         input_dict_1_2 = {'x1_features': feature_1, 'x2_features': feature_2,
                                'im1': img_1, 'im2': img_2,
                                'im1_raw': img_1, 'im2_raw': img_2,
@@ -100,13 +96,21 @@ class MonoFlowNet(nn.Module):
         return output_dict_1_2
 
     def predict_flow(self, inputs, features):
+        outputs = {}
         if self.opt.optical_flow in ['flownet', ]:
-            flow_prev_curr = self.cal_fwd_flownet(features[-1], features[0])
-            flow_curr_prev = self.cal_fwd_flownet(features[0], features[-1])
-            flow_curr_next = self.cal_fwd_flownet(features[0], features[1])
-            flow_next_curr = self.cal_fwd_flownet(features[1], features[0])
-            return flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled'], \
-                   flow_curr_prev['level2_upsampled'], flow_next_curr['level2_upsampled'], 0
+            for (img1_idx, img2_idx) in [(-1, 0), (0, 1)]:
+                out_1 = self.cal_fwd_flownet(features[img1_idx], features[img2_idx])
+                out_2 = self.cal_fwd_flownet(features[img2_idx], features[img1_idx])
+                for scale in initial_opt.scales:
+                    outputs[('flow', img1_idx, img2_idx, scale)] = out_1['level'+str(scale)]
+                    outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
+                    # flow_prev_curr = self.cal_fwd_flownet(features[-1], features[0])
+                    # flow_curr_prev = self.cal_fwd_flownet(features[0], features[-1])
+                    # flow_curr_next = self.cal_fwd_flownet(features[0], features[1])
+                    # flow_next_curr = self.cal_fwd_flownet(features[1], features[0])
+            # return flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled'], \
+            #        flow_curr_prev['level2_upsampled'], flow_next_curr['level2_upsampled'], 0
+            return outputs
 
         elif self.opt.optical_flow in ["upflow", ]:
             flow_prev_curr = self.cal_fwd_upflow(features[-1], features[0], inputs[("color_aug", -1, 0)], inputs[("color_aug", 0, 0)])
@@ -180,18 +184,17 @@ class MonoFlowNet(nn.Module):
 
     def build_flow_decoder(self):
         if self.opt.optical_flow in ["flownet", ]:
-            # TODO: dimesions change
-            feature_channels = [64, 164, 128, 256, 512]
+            feature_channels = [64, 64, 128, 256, 512]
             Corr = networks.CorrEncoder(
-                in_channels=473,
                 pyramid_levels=['level3', 'level4', 'level5', 'level6'],
                 kernel_size=(3, 3, 3, 3),
-                num_convs=(1, 2, 2, 2),
-                out_channels=(256, 512, 512, 1024),
-                redir_in_channels=feature_channels[self.corr_feature_level],
+                out_channels=(128, 256, 512, 1024),
+                inter_channels=(64, 64, 64, 64),
+                redir_in_channels=feature_channels[self.corr_feature_level],  # self.corr_feature_level=2, scale at 1/8
                 redir_channels=32,
                 strides=(1, 2, 2, 2),
                 dilations=(1, 1, 1, 1),
+                paddings=(1, 1, 1, 1),
                 corr_cfg=dict(
                     type='Correlation',
                     kernel_size=1,
@@ -200,29 +203,33 @@ class MonoFlowNet(nn.Module):
                     padding=0,
                     dilation_patch=2),
                 scaled=False,
-                conv_cfg=None,
-                norm_cfg=None,
                 act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
             )
 
-            FlowNet = networks.FlowNetCDecoder(in_channels=dict(
-                level6=1024, level5=1026, level4=770, level3=386, level2=130),
-                out_channels=dict(level6=512, level5=256, level4=128, level3=64),
-                deconv_bias=True,
-                pred_bias=True,
-                upsample_bias=True,
-                norm_cfg=None,
-                act_cfg=dict(type='LeakyReLU', negative_slope=0.1),
-                init_cfg=[
-                    dict(
-                        type='Kaiming',
-                        layer=['Conv2d', 'ConvTranspose2d'],
-                        a=0.1,
-                        mode='fan_in',
-                        nonlinearity='leaky_relu',
-                        bias=0),
-                    dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
-                ])
+            FlowNet = networks.MonoFlowDecoder(
+                upsample_module_in_channels=[1024, 2 + 512 * 3, 2 + 256 * 3, 2 + 128 * 3, 2 + 64 * 2, 2 + 64 * 2],
+                upsample_module_out_channels=[512, 256, 128, 64, 64, 32]
+            )
+
+            # FlowNet = networks.FlowNetCDecoder(
+            #     in_channels=dict(level6=1024, level5=1026, level4=770, level3=386, level2=130),
+            #     out_channels=dict(level6=512, level5=256, level4=128, level3=64),
+            #     deconv_bias=True,
+            #     pred_bias=True,
+            #     upsample_bias=True,
+            #     norm_cfg=None,
+            #     act_cfg=dict(type='LeakyReLU', negative_slope=0.1),
+            #     init_cfg=[
+            #         dict(
+            #             type='Kaiming',
+            #             layer=['Conv2d', 'ConvTranspose2d'],
+            #             a=0.1,
+            #             mode='fan_in',
+            #             nonlinearity='leaky_relu',
+            #             bias=0),
+            #         dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
+            #     ])
+
             return Corr, FlowNet
 
         if self.opt.optical_flow in ["upflow", ]:
@@ -242,10 +249,6 @@ class MonoFlowNet(nn.Module):
             return None, net_conf()
         else:
             raise NotImplementedError
-
-
-
-
 
 
 

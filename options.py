@@ -107,6 +107,10 @@ class MonodepthOptions:
                                  type=int,
                                  default=10)
 
+        self.parser.add_argument("--stop_occ_gradient",
+                                 type=str2bool,
+                                 default=True)
+
         self.parser.add_argument("--norm_trans",
                                  type=str2bool,
                                  default='False')

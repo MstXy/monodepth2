@@ -209,7 +209,7 @@ def torch_warp(img2, flow):
     return img1_warped
 
 
-def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.7, occ_alpha_2=0.05):
+def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.7, occ_alpha_2=0.05, border_mask=True):
     def sum_func(x):
         '''sqrt(flow[0]^2 + flow[1]^2)
         '''
@@ -224,7 +224,16 @@ def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.7, occ_alpha_2=0.05):
     occ_thresh = occ_alpha_1 * mag_sq + occ_alpha_2 / scale
     occ_fw = sum_func(flow_fwd_diff) < occ_thresh  # 0 means the occlusion region where the photo loss we should ignore
     occ_bw = sum_func(flow_bwd_diff) < occ_thresh
-    return occ_fw.float(), occ_bw.float()
+    if not border_mask:
+        mask_fw = create_outgoing_mask(flow_fwd)
+        mask_bw = create_outgoing_mask(flow_bwd)
+    else:
+        mask_fw = create_border_mask(flow_fwd)
+        mask_bw = create_border_mask(flow_fwd)
+    fw = mask_fw * occ_fw
+    bw = mask_bw * occ_bw
+
+    return fw.float(), bw.float()
 
 ############################################
 ####           img, flow, vis utils      ###
@@ -332,7 +341,7 @@ def add_img_weighted(img1, img2, alpha1=0.5):
     return img1 * alpha1 + img2 * (1-alpha1)
 
 
-def log_vis_1(inputs, outputs, occ_dict, img1_idx, img2_idx, j):
+def log_vis_1(inputs, outputs, img1_idx, img2_idx, j, scale=0):
     ''' top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
     Args:
         img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
@@ -340,27 +349,26 @@ def log_vis_1(inputs, outputs, occ_dict, img1_idx, img2_idx, j):
     '''
     img_1_img_2_and_flow = torchvision.transforms.functional.pil_to_tensor(
         stitching_and_show(img_list=[
-            inputs['color_aug', img2_idx, 0][j],  # curr
-            occ_dict[(img1_idx, img2_idx)][j].repeat(3, 1, 1),  # occ_prev_curr
+            inputs['color_aug', img2_idx, scale][j],  # curr
+            outputs[('occ', img1_idx, img2_idx, scale)][j].repeat(3, 1, 1),  # occ_prev_curr
             # occ_dict[(img2_idx, img1_idx)][j].repeat(3, 1, 1),  # occ_curr_prev
-            outputs['flow_fwd'][img2_idx][j],  # flow_prev_curr(img2_idx=0); flow_curr_next(img2_idx=1)
+            outputs[('flow', img1_idx, img2_idx, scale)][j],  # flow_prev_curr(img2_idx=0); flow_curr_next(img2_idx=1)
             # outputs['flow_bwd'][img2_idx][j],  # flow_curr_prev
-            inputs['color_aug', img1_idx, 0][j] # prev
+            inputs['color_aug', img1_idx, scale][j] # prev
         ], ver=True, show=False))
     return img_1_img_2_and_flow
 
-def log_vis_2(inputs, outputs, occ_dict, img1_idx, img2_idx, f_warped_dict, j):
+def log_vis_2(inputs, outputs, img1_idx, img2_idx, j, scale=0):
     ''' diff(target, source), diff * mask, warped, source, flow_img1_img2
     Args:
         img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
         j: the j th img in batch
     '''
-    diff = img_diff_show(f_warped_dict[(img1_idx, img2_idx)][j], inputs['color_aug', img1_idx, 0][j])
-    diff_mask = diff * occ_dict[(img1_idx, img2_idx)][j].repeat(3, 1, 1)
-    aa = f_warped_dict[(img1_idx, img2_idx)][j]
-
+    diff = img_diff_show(outputs[('f_warped', img1_idx, img2_idx, scale)][j], inputs['color_aug', img1_idx, 0][j])
+    diff_mask = diff * outputs[('occ', img1_idx, img2_idx, scale)][j].repeat(3, 1, 1)
+    aa = outputs[('f_warped', img1_idx, img2_idx, scale)][j]
     source = inputs['color_aug', img1_idx, 0][j]
-    flow_img1_img2 = outputs['flow_fwd'][img2_idx][j]
+    flow_img1_img2 = outputs[('flow', img1_idx, img2_idx, scale)][j]
 
     results = torchvision.transforms.functional.pil_to_tensor(
         stitching_and_show(img_list=[
@@ -368,6 +376,7 @@ def log_vis_2(inputs, outputs, occ_dict, img1_idx, img2_idx, f_warped_dict, j):
         ], ver=True, show=False)
     )
     return results
+
 
 def edge_aware_smoothness_order1(img, pred):
 
@@ -391,3 +400,44 @@ def edge_aware_smoothness_order1(img, pred):
     smoothness_x = torch.abs(pred_gradients_x) * weights_x
     smoothness_y = torch.abs(pred_gradients_y) * weights_y
     return torch.mean(smoothness_x) + torch.mean(smoothness_y)
+
+
+def create_mask(tensor, paddings):
+    shape = tensor.shape  # B, C, H, W
+    inner_width = shape[3] - (paddings[1][0] + paddings[1][1])
+    inner_height = shape[2] - (paddings[0][0] + paddings[0][1])
+    inner = torch.ones((inner_height, inner_width)).to(tensor.device)
+
+    mask2d = torch.nn.ZeroPad2d((paddings[1][0], paddings[1][1], paddings[0][0], paddings[0][1]))(inner)
+    # padding_left, padding_right, padding_top, padding_bottom
+    mask3d = mask2d.unsqueeze(0).repeat(shape[0], 1, 1)
+    mask4d = mask3d.unsqueeze(1)  # B, 1, H, W
+    return mask4d.detach()
+
+
+def create_border_mask(tensor, border_ratio=0.1):
+    num_batch, _, height, width = tensor.shape
+    sz = np.ceil(height * border_ratio).astype(np.int).item(0)
+    border_mask = create_mask(tensor, [[sz, sz], [sz, sz]])
+    return border_mask.detach()
+
+
+def length_sq(x):
+    return torch.sum(x**2, 1, keepdim=True)
+
+
+def create_outgoing_mask(flow):
+    num_batch, channel, height, width = flow.shape
+
+    grid_x = torch.arange(width).view(1, 1, width)
+    grid_x = grid_x.repeat(num_batch, height, 1)
+    grid_y = torch.arange(height).view(1, height, 1)
+    grid_y = grid_y.repeat(num_batch, 1, width)
+
+    flow_u, flow_v = torch.unbind(flow, 1)
+    pos_x = grid_x.type(torch.FloatTensor) + flow_u.data.cpu()
+    pos_y = grid_y.type(torch.FloatTensor) + flow_v.data.cpu()
+    inside_x = (pos_x <= (width - 1)) & (pos_x >= 0.0)
+    inside_y = (pos_y <= (height - 1)) & (pos_y >= 0.0)
+    inside = inside_x & inside_y
+    return inside.type(torch.FloatTensor).unsqueeze(1)

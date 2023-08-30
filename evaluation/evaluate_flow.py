@@ -6,6 +6,7 @@ import argparse
 import os
 import numpy as np
 import torch
+import torchvision
 import torchvision.utils as tvu
 import torchvision.transforms.functional as F
 import imageio
@@ -20,6 +21,8 @@ import monodepth2.datasets.flow_eval_datasets as datasets
 from monodepth2.utils import frame_utils
 from monodepth2.utils.utils import InputPadder, forward_interpolate
 import monodepth2.utils.utils as mono_utils
+
+norm_trans = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
 
 
 @torch.no_grad()
@@ -368,6 +371,9 @@ def validate_kitti(log_dir, model, inference_func, epoch_idx, opt_main):
         image2_ori = image2_ori[None].cuda()
         padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
         image1, image2 = padder.pad(image1_ori, image2_ori)
+        if opt_main.norm_trans:
+            image1 = norm_trans(image1)
+            image2 = norm_trans(image2)
 
         flow_ori = inference_func(model, image1, image2)
         flow = padder.unpad(flow_ori).cpu()

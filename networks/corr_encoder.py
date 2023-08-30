@@ -1,8 +1,7 @@
 from typing import Dict, Optional, Sequence, Union
 
 import torch
-from mmcv.cnn.bricks.conv_module import ConvModule
-
+import torch.nn as nn
 from .utils import BasicEncoder, CorrBlock
 
 class ConvModuleMy(torch.nn.Module):
@@ -16,10 +15,6 @@ class ConvModuleMy(torch.nn.Module):
     def forward(self, x):
         out = self.act(self.conv(x))
         return out
-
-
-
-
 
 
 class CorrEncoder(BasicEncoder):
@@ -93,18 +88,11 @@ class CorrEncoder(BasicEncoder):
             init_cfg=init_cfg)
 
         self.corr = CorrBlock(corr_cfg, act_cfg, scaled=scaled)
+        self.conv_redir = nn.sequeential(
+            nn.Conv2d(redir_in_channels, redir_channels, kernel_size),
+            nn.LeakyReLU(act_cfg['negative_slope'])
+        )
 
-        # self.conv_redir = ConvModule(
-        #     in_channels=redir_in_channels,
-        #     out_channels=redir_channels,
-        #     kernel_size=1,
-        #     act_cfg=act_cfg)
-
-        self.conv_redir = ConvModuleMy(
-            in_channels=redir_in_channels,
-            out_channels=redir_channels,
-            kernel_size=1,
-            act_cfg=act_cfg)
 
 
     def forward(self, f1: torch.Tensor,
@@ -119,10 +107,8 @@ class CorrEncoder(BasicEncoder):
             Dict[str, Tensor]: The feature pyramid for correlation.
         """
 
-        corr_feat = self.corr(f1, f2) # 441
+        corr_feat = self.corr(f1, f2)  # 441
         redir_feat = self.conv_redir(f1)
-        # redir_feat = self.conv_redir2(f1)
-
         x = torch.cat((redir_feat, corr_feat), dim=1)
 
         outs = dict()

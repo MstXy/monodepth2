@@ -248,10 +248,10 @@ class FlowNetSDecoder(BaseDecoder):
         super().__init__(init_cfg)
 
         self.decoders = nn.ModuleDict()
-        self.flow_levels = list(in_channels.keys())
+        self.flow_levels = list(in_channels.keys())  # level6=1024, level5=1026, level4=770, level3=386, level2=130
         self.flow_levels.sort()
-        self.start_level = self.flow_levels[-1]
-        self.end_level = self.flow_levels[0]
+        self.start_level = self.flow_levels[-1]  # level6
+        self.end_level = self.flow_levels[0]  # level3
         self.flow_div = flow_div
 
         if flow_loss is not None:
@@ -447,25 +447,143 @@ class FlowNetCDecoder(FlowNetSDecoder):
                     feat = torch.cat((feat1['level1'], upfeat, upflow), dim=1)
                 else:
                     feat = torch.cat((corr_feat[level], upfeat, upflow), dim=1)
-
             flow, upflow, upfeat = self.decoders[level](feat)
             # print('level',self.decoders[level])
             flow_pred[level] = upflow
 
+
         #upsample flow to original size
         for level in self.flow_levels:
-            if level != self.start_level and level == 'level2':  # TODO: use other layer outputs
-                scale_factor = 192//flow_pred[level].shape[2]
-                flow_pred[level+"_upsampled"] = F.interpolate(
+            if level == 'level2':
+                flow_pred["level1"] = F.interpolate(
                     flow_pred[level],
                     scale_factor=2,
                     mode='bilinear',
                     align_corners=False)
-                flow_pred[level+"_upsampled"] = self.conv2(self.conv1(flow_pred[level+"_upsampled"]))
-                
-        
+                flow_pred["level1"] = self.conv2(self.conv1(flow_pred["level1"]))
+
         return flow_pred
     
+
+class BasicUpBlock(nn.Module):
+    """Basic upsample block of FlowNetDecoder.
+    The block includes one convolution for prediction and one
+    deconvolution for next block.
+    Args:
+        in_channels (int): Number of input channels.
+        pred_channels (int): Number of prediction channels. If 1, predict
+            occlusion map. If 2, predict flow map.
+        out_channels (int): Number of output channels of DeconvModule.
+        inter_channels (int, Optional): Number of output channels of inter
+            convolution, which is the same as the number of input channels for
+            flow prediction convolution. If None, there is no inter convolution
+            between input and flow prediction convolution and the input channel
+            of flow prediction convolution is the same as in_channels.
+            Default: None.
+    """
+    def __init__(self,
+                 in_channels: int,
+                 pred_channels: int,
+                 out_channels: Optional[int] = None,
+                 inter_channels: int = None,
+                 deconv_bias: bool = False,
+                 pred_bias: bool = False) -> None:
+        super().__init__()
+        if inter_channels is None:
+            self.pred_out = nn.Conv2d(
+                in_channels=in_channels,
+                out_channels=pred_channels,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=pred_bias)
+        else:
+            pred_out = [
+                nn.Conv2d(
+                    in_channels=in_channels,
+                    out_channels=inter_channels,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=pred_bias),
+                nn.Conv2d(
+                    in_channels=inter_channels,
+                    out_channels=pred_channels,
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                    bias=pred_bias)
+            ]
+            self.pred_out = nn.Sequential(*pred_out)
+
+        self.deconv_out = nn.Sequential(
+            nn.ConvTranspose2d(in_channels=in_channels, out_channels=out_channels, kernel_size=4, stride=2,
+                               dilation=1, padding=1, bias=deconv_bias),
+            nn.LeakyReLU(0.1, inplace=True))
+        self.upsample_pred = nn.Sequential(
+            nn.ConvTranspose2d(in_channels=pred_channels, out_channels=pred_channels, kernel_size=4, stride=2,
+                               dilation=1, padding=1, bias=True),
+            nn.LeakyReLU(0.1, inplace=True))
+
+    def forward(
+            self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Forward function for basic block of FlowNetDecoder.
+
+        Args:
+            x (Tensor): Input feature.
+
+        Returns:
+            tuple: Predicted optical flow, upsampled optical flow and
+                upsampled input feature.
+        """
+        flow = self.pred_out(x)
+        upfeat = self.deconv_out(x)
+        upflow = self.upsample_pred(flow)
+        return flow, upflow, upfeat
+
+
+class MonoFlowDecoder(nn.Module):
+    def __init__(self,
+                 upsample_module_in_channels,
+                 upsample_module_out_channels):
+        super().__init__()
+        upsample_module_in_channels = upsample_module_in_channels  # [1024, 2 + 512*3, 2 + 256*3, 2 + 128*3, 2 + 64*2, 2 + 64*2]
+        upsample_module_out_channels = upsample_module_out_channels  # [512, 256, 128, 64, 64, 32]
+        self.up_sample_modules = nn.ModuleList(
+                    [BasicUpBlock(
+                        in_channels=upsample_module_in_channels[i],
+                        pred_channels=2,
+                        out_channels=upsample_module_out_channels[i],
+                        inter_channels=upsample_module_in_channels[i],
+                        deconv_bias=True,
+                        pred_bias=True) for i in range(len(upsample_module_in_channels))
+                     ]
+                )
+        self.UpSampleBy2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(2, 2, kernel_size=3, stride=1, padding=1, bias=True),
+            nn.LeakyReLU(0.1, inplace=True)
+        )
+
+    def forward(self, backbone_features, corr_features):
+        upflow = None
+        upfeat = None
+        flow_pred = dict()
+        corr_features_list = [v for k, v in corr_features.items()][::-1]
+        backbone_features_list = [v for k, v in backbone_features.items()][::-1]
+
+        for i in range(len(backbone_features_list) + 1):
+            if i == 0:
+                feat = corr_features_list[i]
+            elif len(corr_features_list) - 1 >= i:
+                feat = torch.cat((corr_features_list[i], backbone_features_list[i-1], upfeat, upflow), dim=1)
+            else:
+                feat = torch.cat((backbone_features_list[i - 1], upfeat, upflow), dim=1)
+            flow, upflow, upfeat = self.up_sample_modules[i](feat)
+            flow_pred['level'+str(5-i)] = self.UpSampleBy2(flow)
+        return flow_pred
+
 
 if __name__ == "__main__":
     net = FlowNetCDecoder(in_channels=dict(
@@ -487,4 +605,34 @@ if __name__ == "__main__":
                     dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
                 ])
     print(net)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
