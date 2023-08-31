@@ -163,6 +163,13 @@ class MonodepthOptions:
                                  type=int,
                                  help="scales used in the loss",
                                  default=[0, 1, 2, 3])
+
+        self.parser.add_argument("--flow_scales",
+                                 nargs="+",
+                                 type=int,
+                                 help="scales used in the loss",
+                                 default=[0, 1, 2, 3])
+
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",

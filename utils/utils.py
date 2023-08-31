@@ -209,7 +209,7 @@ def torch_warp(img2, flow):
     return img1_warped
 
 
-def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.7, occ_alpha_2=0.05, border_mask=True):
+def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=1, occ_alpha_2=0.05, border_mask=True):
     def sum_func(x):
         '''sqrt(flow[0]^2 + flow[1]^2)
         '''

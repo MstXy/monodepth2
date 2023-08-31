@@ -170,8 +170,8 @@ class MonoFlowLoss():
             if opt.stop_occ_gradient:
                 occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
-            occ_1_2 = torch.ones_like(flow_1_2[:, 0, :, :]).unsqueeze(dim=1)
-            occ_2_1 = occ_1_2.clone().detach()
+            occ_1_2 = mono_utils.create_border_mask(flow_1_2)
+            occ_2_1 = occ_1_2
         # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
@@ -179,33 +179,26 @@ class MonoFlowLoss():
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
+
         photo_loss_ssim = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
-
-        # l1_plus_ssmi = self.l1_plus_ssmi(img1, img1_warped, occ_1_2, alpha=0.85)
-
-        flow_loss["photo_loss_l1"] = photo_loss_l1
-        flow_loss["photo_loss_ssim"] = photo_loss_ssim
+        flow_loss["photo_loss_l1"] = photo_loss_l1 * 0.15
+        flow_loss["photo_loss_ssim"] = photo_loss_ssim * 0.85
         # ===== smooth loss calculation:
-        # 1.1 First Order smoothness loss
-        # smo_loss = mono_utils.edge_aware_smoothness_order1(
-        #     img=target, pred=flow_fwd)
-        # flow_loss += smo_loss
-        # 1.2 Second Order smoothness loss
-        smo_loss_o1 = self.edge_aware_smoothness_order2(img=img1, pred=flow_1_2) + \
-                   self.edge_aware_smoothness_order2(img=img2, pred=flow_2_1)
-        smo_loss_o2 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
+        smo_loss_o1 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
                    self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
-        smo_loss = smo_loss_o1 + smo_loss_o2
+        smo_loss_o2 = self.edge_aware_smoothness_order2(img=img1, pred=flow_1_2) + \
+                   self.edge_aware_smoothness_order2(img=img2, pred=flow_2_1)
         # ===== census loss calculation:
 
         # ===== multi scale distillation loss calculation:
 
-        flow_loss["smo_loss"] = smo_loss
+        flow_loss["smo_loss_o1"] = smo_loss_o1
+        flow_loss["smo_loss_o2"] = smo_loss_o2
         return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
 
     def compute_losses(self, inputs, outputs):
@@ -213,9 +206,7 @@ class MonoFlowLoss():
         """Compute the reprojection and smoothness losses for a minibatch
         """
         losses = {}
-        losses["smo_loss"] = 0
-        losses["photo_loss_l1"] = 0
-        losses["photo_loss_ssim"] = 0
+        losses["flow_loss"] = 0
         total_loss = 0
         if self.opt.optical_flow:
             # compute flow losses, warp img, calculate occ map
@@ -244,11 +235,13 @@ class MonoFlowLoss():
                 outputs[('occ', 0, 1, scale)] = occ_1_2
                 outputs[('occ', 1, 0, scale)] = occ_2_1
 
-                losses["smo_loss"] += flow_loss_1["smo_loss"] + flow_loss_2["smo_loss"]
-                losses["photo_loss_l1"] += flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
-                losses["photo_loss_ssim"] += flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
+                losses["smo_loss_o1", scale] = flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]
+                losses["smo_loss_o2", scale] = flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]
+                losses["photo_loss_l1", scale] = flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
+                losses["photo_loss_ssim", scale] = flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
+                losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
+                                        losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
 
-            losses["flow_loss"] = losses["photo_loss_l1"] + losses["photo_loss_ssim"] + losses["smo_loss"]
             total_loss += losses["flow_loss"]
 
         # if self.opt.optical_flow in ['upflow']:
@@ -513,79 +506,6 @@ class MonoFlowLoss():
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
 
-    def flow_evaluation(self, model):
-        save_path = os.path.join(opt.log_dir, 'flow_val')
-        os.makedirs(save_path, exist_ok=True)
-        for m in model.values():
-            m.eval()
-
-        t1 = time.time()
-        from monodepth2.datasets.flow_eval_datasets import KITTI as KITTI_flow_2015_dataset
-        trans = transforms.Resize((opt.height, opt.width))
-        val_dataset = KITTI_flow_2015_dataset(split='training', root=self.val_data_root)
-
-        out_list, epe_list = [], []
-        for val_id in range(len(val_dataset)):
-            # ==== data preparation
-            image1, image2, flow_gt, valid_gt = val_dataset[val_id]
-            image1 = image1[None].to(opt.device)
-            image2 = image2[None].to(opt.device)
-            padder = mono_utils.InputPadder(image1.shape, mode='kitti')
-            image1, image2 = padder.pad(image1, image2)
-            image1 = trans(image1)
-            image2 = trans(image2)
-            flow_gt = trans(flow_gt)
-            valid_gt = trans(valid_gt.unsqueeze(0))
-            valid_gt = valid_gt.squeeze()
-
-            # ==== flow forward propagation:
-            all_color_aug = torch.cat((image1, image2, image1), )  # all images: ([i-1, i, i+1] * [L, R])
-            outdict = model(all_color_aug)
-            out_flow = outdict['flow'][0].squeeze()
-            flow = out_flow.cpu()
-
-            # ==== flow vis for debug
-            if val_id % 10 == 0:
-                out_flow = flow_vis.flow_to_color(flow.permute(1, 2, 0).clone().detach().numpy(),
-                                                  convert_to_bgr=False)
-                gt_flow = flow_vis.flow_to_color(flow_gt.permute(1, 2, 0).clone().detach().numpy(),
-                                                 convert_to_bgr=False)
-                gt_flow = Image.fromarray(gt_flow)
-                out_flow = Image.fromarray(out_flow)
-                result = mono_utils.merge_images(gt_flow, out_flow)
-                path = os.path.join(save_path, datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + '.jpg')
-                result.save(path)
-
-            epe = torch.sum((flow - flow_gt) ** 2, dim=0).sqrt()
-            mag = torch.sum(flow_gt ** 2, dim=0).sqrt()
-            epe = epe.view(-1)
-            mag = mag.view(-1)
-            val = valid_gt.view(-1) >= 0.5
-            val_num = torch.sum((1 * val))
-            # def vis_val(val):
-            #     val = (255 * val).numpy().reshape((192, 640))
-            #     val_vis = Image.fromarray(np.uint8(val))
-            #     val_vis.show()
-            # vis_val(val)
-
-            out = ((epe > 3.0) & ((epe / mag) > 0.05)).float()
-            epe_list.append(epe[val].mean().item())
-            out_list.append(out[val].cpu().numpy())
-
-        for m in model.values():
-            m.train()
-        epe_list = np.array(epe_list)
-        out_list = np.concatenate(out_list)
-        epe = np.mean(epe_list)
-        f1 = 100 * np.mean(out_list)
-
-        t2 = time.time()
-        print("Validation KITTI:  epe: %f,   f1: %f, time_spent: %f" % (epe, f1, t2 - t1))
-        writer = self.writers['val']
-        writer.add_scalar("KITTI_epe", epe, self.step)
-        writer.add_scalar("KITTI_f1", f1, self.step)
-
-        return {'kitti_epe': epe, 'kitti_f1': f1}
 
 
 class DDP_Trainer():
@@ -705,27 +625,32 @@ class DDP_Trainer():
         """Print a logging statement to the terminal
         """
         loss = losses["loss"].cpu().data
-        # todo
-        # smo_loss = losses["smo_loss"]
-        # photo_loss = losses["photo_loss"]
-        smo_loss = 0
-        photo_loss = 0
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
         training_time_left = (self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         curr_lr = self.model_optimizer.param_groups[0]['lr']
         print_string = "epoch {:>3} | batch {:>6} | examples/s: {:5.1f}" + \
-                       " | loss: {:.5f} | time elapsed: {} | time left: {} | learning_rate: {} | smooth_loss: {} | photo loss: {}"
+                       " | loss: {:.5f} | time elapsed: {} | time left: {} | learning_rate: {}"
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
                                   mono_utils.sec_to_hm_str(time_sofar), mono_utils.sec_to_hm_str(training_time_left),
-                                  curr_lr, smo_loss, photo_loss))
+                                  curr_lr))
 
     def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
         for l, v in losses.items():
-            writer.add_scalar("{}".format(l), v, self.step)
+            if isinstance(l, tuple) and l[0] in ['smo_loss_o1', 'smo_loss_o2', 'photo_loss_l1', 'photo_loss_ssim']:
+                continue
+            else:
+                writer.add_scalar("{}".format(l), v, self.step)
+
+        for scale in opt.scales:
+            writer.add_scalar("smo_loss_o1/scale{}".format(scale), losses["smo_loss_o1", scale], self.step)
+            writer.add_scalar("smo_loss_o2/scale{}".format(scale), losses["smo_loss_o2", scale], self.step)
+            writer.add_scalar("photo_loss_l1/scale{}".format(scale), losses["photo_loss_l1", scale], self.step)
+            writer.add_scalar("photo_loss_ssim/scale{}".format(scale), losses["photo_loss_ssim", scale], self.step)
+
 
         for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
             if self.opt.optical_flow is not None:
