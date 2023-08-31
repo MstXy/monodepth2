@@ -206,8 +206,16 @@ class MonoFlowNet(nn.Module):
                 act_cfg=dict(type='LeakyReLU', negative_slope=0.1)
             )
 
+
+            if initial_opt.feature_type == 0:
+                usmc = [1024, 2 + 512 * 3, 2 + 256 * 3, 2 + 128 * 3, 2 + 64 * 2, 2 + 64 * 2],
+            elif initial_opt.feature_type == 1:
+                usmc = [1024, 2 + 512 * 2, 2 + 256 * 2, 2 + 128 * 2, 2 + 64 * 2, 2 + 64 * 2],
+            elif initial_opt.feature_type == 2:
+                usmc = [1024, 2 + 512 * 3, 2 + 256 * 3, 2 + 128 * 3, 2 + 64 * 1, 2 + 64 * 1],
+
             FlowNet = networks.MonoFlowDecoder(
-                upsample_module_in_channels=[1024, 2 + 512 * 3, 2 + 256 * 3, 2 + 128 * 3, 2 + 64 * 2, 2 + 64 * 2],
+                upsample_module_in_channels=usmc[0],
                 upsample_module_out_channels=[512, 256, 128, 64, 64, 32]
             )
 

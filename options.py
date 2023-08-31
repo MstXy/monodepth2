@@ -99,6 +99,10 @@ class MonodepthOptions:
                                  default="flownet")
                                  # default=None)
 
+        self.parser.add_argument("--feature_type",
+                                 type=int,
+                                 default=0)
+
         self.parser.add_argument("--flow_occ_check",
                                  default=False,
                                  type=str2bool)

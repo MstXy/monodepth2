@@ -10,6 +10,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import build_activation_layer, build_norm_layer
 from mmengine.model import BaseModule
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+initial_opt = options.parse()
 
 # from .builder import DECODERS, build_loss
 from .base_flow_decoder import BaseDecoder
@@ -545,11 +548,11 @@ class BasicUpBlock(nn.Module):
 
 class MonoFlowDecoder(nn.Module):
     def __init__(self,
-                 upsample_module_in_channels,
-                 upsample_module_out_channels):
+                 upsample_module_in_channels,  # [1024, 2 + 512*3, 2 + 256*3, 2 + 128*3, 2 + 64*2, 2 + 64*2]
+                 upsample_module_out_channels):   # [512, 256, 128, 64, 64, 32]
         super().__init__()
-        upsample_module_in_channels = upsample_module_in_channels  # [1024, 2 + 512*3, 2 + 256*3, 2 + 128*3, 2 + 64*2, 2 + 64*2]
-        upsample_module_out_channels = upsample_module_out_channels  # [512, 256, 128, 64, 64, 32]
+
+
         self.up_sample_modules = nn.ModuleList(
                     [BasicUpBlock(
                         in_channels=upsample_module_in_channels[i],
@@ -572,16 +575,51 @@ class MonoFlowDecoder(nn.Module):
         flow_pred = dict()
         corr_features_list = [v for k, v in corr_features.items()][::-1]
         backbone_features_list = [v for k, v in backbone_features.items()][::-1]
+        if initial_opt.feature_type == 0:
+            for i in range(len(backbone_features_list) + 1):
+                if i == 0:
+                    feat = corr_features_list[i]
+                elif len(corr_features_list) - 1 >= i:
+                    feat = torch.cat((corr_features_list[i], backbone_features_list[i-1], upfeat, upflow), dim=1)
+                    # feat = torch.cat((corr_features_list[i], upfeat, upflow), dim=1)
+                else:
+                    feat = torch.cat((backbone_features_list[i - 1], upfeat, upflow), dim=1)
+                    # feat = torch.cat((upfeat, upflow), dim=1)
 
-        for i in range(len(backbone_features_list) + 1):
-            if i == 0:
-                feat = corr_features_list[i]
-            elif len(corr_features_list) - 1 >= i:
-                feat = torch.cat((corr_features_list[i], backbone_features_list[i-1], upfeat, upflow), dim=1)
-            else:
-                feat = torch.cat((backbone_features_list[i - 1], upfeat, upflow), dim=1)
-            flow, upflow, upfeat = self.up_sample_modules[i](feat)
-            flow_pred['level'+str(5-i)] = self.UpSampleBy2(flow)
+                flow, upflow, upfeat = self.up_sample_modules[i](feat)
+                flow_pred['level'+str(5-i)] = self.UpSampleBy2(flow)
+        elif initial_opt.feature_type == 1:
+
+            for i in range(len(backbone_features_list) + 1):
+                if i == 0:
+                    feat = corr_features_list[i]
+                elif len(corr_features_list) - 1 >= i:
+                    # feat = torch.cat((corr_features_list[i], backbone_features_list[i - 1], upfeat, upflow), dim=1)
+                    feat = torch.cat((corr_features_list[i], upfeat, upflow), dim=1)
+                else:
+                    feat = torch.cat((backbone_features_list[i - 1], upfeat, upflow), dim=1)
+                    # feat = torch.cat((upfeat, upflow), dim=1)
+
+                flow, upflow, upfeat = self.up_sample_modules[i](feat)
+                flow_pred['level' + str(5 - i)] = self.UpSampleBy2(flow)
+        elif initial_opt.feature_type == 2:
+            for i in range(len(backbone_features_list) + 1):
+                if i == 0:
+                    feat = corr_features_list[i]
+                elif len(corr_features_list) - 1 >= i:
+                    feat = torch.cat((corr_features_list[i], backbone_features_list[i - 1], upfeat, upflow), dim=1)
+                    # feat = torch.cat((corr_features_list[i], upfeat, upflow), dim=1)
+                else:
+                    # feat = torch.cat((backbone_features_list[i - 1], upfeat, upflow), dim=1)
+                    feat = torch.cat((upfeat, upflow), dim=1)
+
+                flow, upflow, upfeat = self.up_sample_modules[i](feat)
+                flow_pred['level' + str(5 - i)] = self.UpSampleBy2(flow)
+
+
+
+
+
         return flow_pred
 
 

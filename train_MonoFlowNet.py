@@ -171,6 +171,7 @@ class MonoFlowLoss():
                 occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
             occ_1_2 = mono_utils.create_border_mask(flow_1_2)
+            # occ_1_2 = torch.zeros_like(flow_1_2[:, 0, :, :].unsqueeze(1))
             occ_2_1 = occ_1_2
         # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
@@ -507,7 +508,6 @@ class MonoFlowLoss():
             losses[metric] = np.array(depth_errors[i].cpu())
 
 
-
 class DDP_Trainer():
     def __init__(self, gpu_id, train_loader):
         self.opt = opt
@@ -644,6 +644,7 @@ class DDP_Trainer():
                 continue
             else:
                 writer.add_scalar("{}".format(l), v, self.step)
+        writer.add_scalar("flow_mean", torch.mean(torch.abs(outputs['flow', -1, 0, 0][0])), self.step)
 
         for scale in opt.scales:
             writer.add_scalar("smo_loss_o1/scale{}".format(scale), losses["smo_loss_o1", scale], self.step)
@@ -672,6 +673,14 @@ class DDP_Trainer():
                                  prev_warped_prev_and_diff, self.step)
                 writer.add_image('1.Diff_2.DiffMasked_3.WarpedCurr_4.Curr_5.FlowCurrNext/{}'.format(j),
                                  curr_warped_curr_and_diff, self.step)
+
+                # Create color histogram of flow
+
+
+
+
+
+
 
             if self.opt.depth_branch:
                 for s in self.opt.scales:
