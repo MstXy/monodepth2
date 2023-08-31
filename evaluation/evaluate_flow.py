@@ -527,7 +527,7 @@ def evaluate_flow_online(log_dir, checkpoint_path, model_name, epoch_idx, opt_ma
         input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
             image1, image2, image1
         out_dict = model(input_dict)
-        flow_1_2 = out_dict['flow_fwd'][0][0]
+        flow_1_2 = out_dict['flow', -1, 0, 0][0]
         return flow_1_2
 
     vaL_kitti_out = validate_kitti(log_dir, model, flow_inference_func, epoch_idx, opt_main)
