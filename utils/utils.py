@@ -341,6 +341,20 @@ def add_img_weighted(img1, img2, alpha1=0.5):
     return img1 * alpha1 + img2 * (1-alpha1)
 
 
+def upsample2d_flow_as(inputs, target_as, mode="bilinear", if_rate=False):
+    _, _, h, w = target_as.size()
+    res = F.interpolate(inputs, [h, w], mode=mode, align_corners=True)
+    if if_rate:
+        _, _, h_, w_ = inputs.size()
+        u_scale = (w / w_)
+        v_scale = (h / h_)
+        u, v = res.chunk(2, dim=1)
+        u *= u_scale
+        v *= v_scale
+        res = torch.cat([u, v], dim=1)
+    return res
+
+
 def log_vis_1(inputs, outputs, img1_idx, img2_idx, j, scale=0):
     ''' top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
     Args:

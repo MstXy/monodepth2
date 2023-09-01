@@ -4,7 +4,7 @@ implementation of the PWC-DC network for optical flow estimation by Sun et al., 
 Jinwei Gu and Zhile Ren
 
 Modified from 
-
+https://github.com/NVlabs/PWC-Net
 
 }
 
@@ -12,12 +12,10 @@ Modified from
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
+import torch.nn.functional as F
 import os
-os.environ['PYTHON_EGG_CACHE'] = 'tmp/' # a writable directory 
-# from correlation_package.modules.corr import Correlation 
-
-from .correlation import correlation 
-
+# os.environ['PYTHON_EGG_CACHE'] = 'tmp/' # a writable directory
+from .correlation import corr_pwc as correlation
 import numpy as np
 
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):   
@@ -39,12 +37,12 @@ class PWCDecoder(nn.Module):
     PWC-DC net. add dilation convolution and densenet connections
 
     """
-    def __init__(self, md=4):
+    def __init__(self, md=4, training=True):
         """
         input: md --- maximum displacement (for correlation. default: 4), after warpping
-
         """
-        super(PWCDecoder,self).__init__()
+        super(PWCDecoder, self).__init__()
+        self.training = training
 
         # self.conv1a  = conv(3,   16, kernel_size=3, stride=2)
         # self.conv1aa = conv(16,  16, kernel_size=3, stride=1)
@@ -67,9 +65,17 @@ class PWCDecoder(nn.Module):
 
         # self.corr    = Correlation(pad_size=md, kernel_size=1, max_displacement=md, stride1=1, stride2=1, corr_multiply=1)
         self.leakyRELU = nn.LeakyReLU(0.1)
-        
+
+        self.conv_feat_scale1 = conv(64, 16, kernel_size=3, stride=1, padding=1)  # 1->2
+        self.conv_feat_scale2 = conv(64, 32, kernel_size=3, stride=1, padding=1)  # 2->3
+        self.conv_feat_scale3 = conv(128, 64, kernel_size=3, stride=1, padding=1)  # 3->4
+        self.conv_feat_scale4 = conv(256, 96, kernel_size=3, stride=1, padding=1)  # 4->5
+        self.conv_feat_scale5 = conv(512, 128, kernel_size=3, stride=1, padding=1)  # 5->6
+        self.conv_scale5_to_scale_6 = conv(128, 196, kernel_size=3, stride=2)  # 6->5
+
+
         nd = (2*md+1)**2
-        dd = np.cumsum([128,128,96,64,32])
+        dd = np.cumsum([128, 128, 96, 64, 32])
 
         od = nd
         self.conv6_0 = conv(od,      128, kernel_size=3, stride=1)
@@ -174,28 +180,33 @@ class PWCDecoder(nn.Module):
         return output*mask
 
 
-    def forward(self,x):
-        im1 = x[:,:3,:,:]
-        im2 = x[:,3:,:,:]
-        
-        c11 = self.conv1b(self.conv1aa(self.conv1a(im1)))
-        c21 = self.conv1b(self.conv1aa(self.conv1a(im2)))
-        c12 = self.conv2b(self.conv2aa(self.conv2a(c11)))
-        c22 = self.conv2b(self.conv2aa(self.conv2a(c21)))
-        c13 = self.conv3b(self.conv3aa(self.conv3a(c12)))
-        c23 = self.conv3b(self.conv3aa(self.conv3a(c22)))
-        c14 = self.conv4b(self.conv4aa(self.conv4a(c13)))
-        c24 = self.conv4b(self.conv4aa(self.conv4a(c23)))
-        c15 = self.conv5b(self.conv5aa(self.conv5a(c14)))
-        c25 = self.conv5b(self.conv5aa(self.conv5a(c24)))
-        c16 = self.conv6b(self.conv6a(self.conv6aa(c15)))
-        c26 = self.conv6b(self.conv6a(self.conv6aa(c25)))
+    def forward(self, resnet_feat1, resnet_feat2):
+        # im1 = x[:,:3,:,:]
+        # im2 = x[:,3:,:,:]
+        #
+        # c11 = self.conv1b(self.conv1aa(self.conv1a(im1)))
+        # c21 = self.conv1b(self.conv1aa(self.conv1a(im2)))
+        # c12 = self.conv2b(self.conv2aa(self.conv2a(c11)))
+        # c22 = self.conv2b(self.conv2aa(self.conv2a(c21)))
+        # c13 = self.conv3b(self.conv3aa(self.conv3a(c12)))
+        # c23 = self.conv3b(self.conv3aa(self.conv3a(c22)))
+        # c14 = self.conv4b(self.conv4aa(self.conv4a(c13)))
+        # c24 = self.conv4b(self.conv4aa(self.conv4a(c23)))
+        # c15 = self.conv5b(self.conv5aa(self.conv5a(c14)))
+        # c25 = self.conv5b(self.conv5aa(self.conv5a(c24)))
+        # c16 = self.conv6b(self.conv6a(self.conv6aa(c15)))
+        # c26 = self.conv6b(self.conv6a(self.conv6aa(c25)))
+
+        c11, c21 = self.conv_feat_scale1(resnet_feat1[0]), self.conv_feat_scale1(resnet_feat2[0])  # feature_1&2_level_1; (16, 96, 320), 1/2 scale
+        c12, c22 = self.conv_feat_scale2(resnet_feat1[1]), self.conv_feat_scale2(resnet_feat2[1])  # feature_1&2_level_2; (32, 48, 160), 1/4 scale
+        c13, c23 = self.conv_feat_scale3(resnet_feat1[2]), self.conv_feat_scale3(resnet_feat2[2])  # feature_1&2_level_3; (64, 24, 80), 1/8 scale
+        c14, c24 = self.conv_feat_scale4(resnet_feat1[3]), self.conv_feat_scale4(resnet_feat2[3])  # feature_1&2_level_4; (96, 12, 40), 1/16 scale
+        c15, c25 = self.conv_feat_scale5(resnet_feat1[4]), self.conv_feat_scale5(resnet_feat2[4])  # feature_1&2_level_5; (128, 6, 20), 1/32 scale
+        c16, c26 = self.conv_scale5_to_scale_6(c15), self.conv_scale5_to_scale_6(c25)  # feature_1&2_level_6; (196, 3, 10), 1/64 scale
 
 
-        corr6 = correlation.FunctionCorrelation(c16, c26) 
-        corr6 = self.leakyRELU(corr6)   
-
-
+        corr6 = correlation.FunctionCorrelation(c16, c26)
+        corr6 = self.leakyRELU(corr6)
         x = torch.cat((self.conv6_0(corr6), corr6),1)
         x = torch.cat((self.conv6_1(x), x),1)
         x = torch.cat((self.conv6_2(x), x),1)
@@ -263,8 +274,27 @@ class PWCDecoder(nn.Module):
  
         x = self.dc_conv4(self.dc_conv3(self.dc_conv2(self.dc_conv1(x))))
         flow2 = flow2 + self.dc_conv7(self.dc_conv6(self.dc_conv5(x)))
-        
+        flow2 = F.interpolate(flow2, scale_factor=4, mode='bilinear', align_corners=True)
+        flow3 = F.interpolate(flow3, scale_factor=4, mode='bilinear', align_corners=True)
+        flow4 = F.interpolate(flow4, scale_factor=4, mode='bilinear', align_corners=True)
+        flow5 = F.interpolate(flow5, scale_factor=4, mode='bilinear', align_corners=True)
+        flow6 = F.interpolate(flow6, scale_factor=4, mode='bilinear', align_corners=True)
+
+
         if self.training:
-            return flow2,flow3,flow4,flow5,flow6
+            out = {'level0':flow2, 'level1':flow3, 'level2':flow4, 'level3':flow5, 'level4':flow6}
+            return out
         else:
             return flow2
+
+
+
+
+
+
+
+
+
+
+
+

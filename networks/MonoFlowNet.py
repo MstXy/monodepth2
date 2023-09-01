@@ -76,6 +76,9 @@ class MonoFlowNet(nn.Module):
         flow_1_2 = self.FlowDecoder(mod_1, corr_1_2)  # ['level'+str(scale)]
         return flow_1_2
 
+    def cal_fwd_pwcnet(self, feature_1, feature_2):
+        return self.FlowDecoder(feature_1, feature_2)
+
     def cal_fwd_upflow(self, feature_1, feature_2, img_1, img_2):
         '''
         Args:
@@ -104,12 +107,6 @@ class MonoFlowNet(nn.Module):
                 for scale in initial_opt.scales:
                     outputs[('flow', img1_idx, img2_idx, scale)] = out_1['level'+str(scale)]
                     outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
-                    # flow_prev_curr = self.cal_fwd_flownet(features[-1], features[0])
-                    # flow_curr_prev = self.cal_fwd_flownet(features[0], features[-1])
-                    # flow_curr_next = self.cal_fwd_flownet(features[0], features[1])
-                    # flow_next_curr = self.cal_fwd_flownet(features[1], features[0])
-            # return flow_prev_curr['level2_upsampled'], flow_curr_next['level2_upsampled'], \
-            #        flow_curr_prev['level2_upsampled'], flow_next_curr['level2_upsampled'], 0
             return outputs
 
         elif self.opt.optical_flow in ["upflow", ]:
@@ -122,7 +119,16 @@ class MonoFlowNet(nn.Module):
                              flow_prev_curr['census_loss'] + flow_prev_curr['msd_loss']
             return flow_prev_curr['flow_f_out'], flow_curr_next['flow_f_out'], \
                    flow_curr_prev['flow_f_out'], flow_next_curr['flow_f_out'], loss_by_upflow
-        # todo: 确认两个flownet的dimension输出是一样的
+
+
+        elif self.opt.optical_flow in ["pwc", ]:
+            for (img1_idx, img2_idx) in [(-1, 0), (0, 1)]:
+                out_1 = self.cal_fwd_pwcnet(features[img1_idx], features[img2_idx])
+                out_2 = self.cal_fwd_pwcnet(features[img2_idx], features[img1_idx])
+                for scale in initial_opt.scales:
+                    outputs[('flow', img1_idx, img2_idx, scale)] = out_1['level'+str(scale)]
+                    outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
+            return outputs
 
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
@@ -240,7 +246,7 @@ class MonoFlowNet(nn.Module):
 
             return Corr, FlowNet
 
-        if self.opt.optical_flow in ["upflow", ]:
+        elif self.opt.optical_flow in ["upflow", ]:
             from monodepth2.UPFlow_pytorch.model.upflow import UPFlow_net
             param_dict = dict(occ_type='for_back_check', alpha_1=0.1, alpha_2=0.5, occ_check_obj_out_all='all',
                               stop_occ_gradient=False, smooth_level='final', smooth_type='edge', smooth_order_1_weight=1,
@@ -255,8 +261,10 @@ class MonoFlowNet(nn.Module):
             net_conf.update(param_dict)
             net_conf.get_name(print_now=True)
             return None, net_conf()
-        else:
-            raise NotImplementedError
+
+        elif self.opt.optical_flow in ["pwc", ]:
+            return None, networks.PWCDecoder()
+
 
 
 

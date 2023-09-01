@@ -674,14 +674,6 @@ class DDP_Trainer():
                 writer.add_image('1.Diff_2.DiffMasked_3.WarpedCurr_4.Curr_5.FlowCurrNext/{}'.format(j),
                                  curr_warped_curr_and_diff, self.step)
 
-                # Create color histogram of flow
-
-
-
-
-
-
-
             if self.opt.depth_branch:
                 for s in self.opt.scales:
                     for frame_id in self.opt.frame_ids:
