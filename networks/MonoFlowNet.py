@@ -27,6 +27,7 @@ class MonoFlowNet(nn.Module):
 
         # modules
         self.ResEncoder = networks.ResnetEncoder(self.opt.num_layers, self.opt.weights_init == "pretrained")
+        
         if self.opt.depth_branch:
             self.DepthDecoder = networks.DepthDecoder(self.ResEncoder.num_ch_enc, self.opt.scales)
             self.PoseDecoder = networks.PoseDecoder(self.ResEncoder.num_ch_enc, self.num_pose_frames)
@@ -43,13 +44,15 @@ class MonoFlowNet(nn.Module):
 
         if self.opt.optical_flow:
             self.Corr, self.FlowDecoder = self.build_flow_decoder()
-
+        
     def forward(self, inputs):
         outputs = {}
+        curr_bs = inputs[("color_aug", 0, 0)].size()[0]
         all_color_aug = torch.cat(
             [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])  # all images: ([i-1, i, i+1] * [L, R])
         all_features = self.ResEncoder(all_color_aug)
-        all_features = [torch.split(f, self.opt.batch_size) for f in all_features]  # separate by frame
+        all_features = [torch.split(f, curr_bs) for f in all_features]  # separate by frame
+        
         features = {}
         for i, k in enumerate(self.opt.frame_ids):
             features[k] = [f[i] for f in all_features]
@@ -251,11 +254,13 @@ class MonoFlowNet(nn.Module):
             param_dict = dict(occ_type='for_back_check', alpha_1=0.1, alpha_2=0.5, occ_check_obj_out_all='all',
                               stop_occ_gradient=False, smooth_level='final', smooth_type='edge', smooth_order_1_weight=1,
                               smooth_order_2_weight=0, photo_loss_type='abs_robust', photo_loss_delta=0.4,
-                              photo_loss_use_occ=opt.photo_loss_use_occ, photo_loss_census_weight=1, if_norm_before_cost_volume=True,
+                              photo_loss_use_occ=True, photo_loss_census_weight=1, 
+                              if_norm_before_cost_volume=True,
                               norm_moments_across_channels=False, norm_moments_across_images=False,
                               multi_scale_distillation_weight=1, multi_scale_distillation_style='upup',
                               multi_scale_photo_weight=1, multi_scale_distillation_occ=True, if_froze_pwc=False,
-                              input_or_sp_input=1, if_use_boundary_warp=True, if_use_cor_pytorch=True)
+                              input_or_sp_input=1, if_use_boundary_warp=True, if_use_cor_pytorch=True,
+                              if_sgu_upsample=True)
 
             net_conf = UPFlow_net.config()
             net_conf.update(param_dict)

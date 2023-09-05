@@ -6,6 +6,7 @@ import numpy as np
 from tensorboardX import SummaryWriter
 import flow_vis
 import json
+import math
 import os
 import sys
 import pdb
@@ -19,6 +20,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
+import torchvision.utils as tvu
+import torchvision.transforms.functional as F
 
 # ==== torch ddp import
 import torch.distributed as dist
@@ -38,6 +41,21 @@ from monodepth2.networks.UnFlowNet import UnFlowNet
 options = MonodepthOptions()
 opt = options.parse()
 fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
+
+
+
+
+
+
+import matplotlib.pyplot as plt
+import matplotlib.colors as colors
+cmap = plt.get_cmap('viridis')
+import monodepth2.datasets.flow_eval_datasets as flow_eval_datasets
+from monodepth2.utils import frame_utils
+from monodepth2.utils.utils import InputPadder, forward_interpolate
+
+
+
 
 IF_DEBUG = False
 if IF_DEBUG:
@@ -175,10 +193,10 @@ class MonoFlowLoss():
             occ_2_1 = occ_1_2
         # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
-                                                photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_type='L1',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
-                                                photo_loss_type='abs_robust',  # abs_robust, charbonnier, L1, SSIM
+                                                photo_loss_type='L1',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
 
         photo_loss_ssim = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
@@ -190,15 +208,15 @@ class MonoFlowLoss():
         flow_loss["photo_loss_l1"] = photo_loss_l1 * 0.15
         flow_loss["photo_loss_ssim"] = photo_loss_ssim * 0.85
         # ===== smooth loss calculation:
-        smo_loss_o1 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
-                   self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
+        # smo_loss_o1 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
+        #            self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
         smo_loss_o2 = self.edge_aware_smoothness_order2(img=img1, pred=flow_1_2) + \
                    self.edge_aware_smoothness_order2(img=img2, pred=flow_2_1)
         # ===== census loss calculation:
 
         # ===== multi scale distillation loss calculation:
 
-        flow_loss["smo_loss_o1"] = smo_loss_o1
+        flow_loss["smo_loss_o1"] = 0
         flow_loss["smo_loss_o2"] = smo_loss_o2
         return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
 
@@ -236,10 +254,10 @@ class MonoFlowLoss():
                 outputs[('occ', 0, 1, scale)] = occ_1_2
                 outputs[('occ', 1, 0, scale)] = occ_2_1
 
-                losses["smo_loss_o1", scale] = flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]
-                losses["smo_loss_o2", scale] = flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]
-                losses["photo_loss_l1", scale] = flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]
-                losses["photo_loss_ssim", scale] = flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"]
+                losses["smo_loss_o1", scale] = (flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]) * 50 if scale in [2, 3] else 0 
+                losses["smo_loss_o2", scale] = (flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]) * 50 if scale in [2, 3] else 0 
+                losses["photo_loss_l1", scale] = (flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]) * 0.35 * math.exp(-scale)
+                losses["photo_loss_ssim", scale] = (flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"] ) * 0.65 * math.exp(-scale)
                 losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
                                         losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
 
@@ -477,36 +495,6 @@ class MonoFlowLoss():
         ssim_loss = torch.sum(ssim_sum * occ_1_2) / (torch.sum(ssim_sum) + 1e-6)
         return alpha * ssim_loss + (1-alpha) * l1_loss
 
-    def depth_evaluation(self, inputs, outputs, losses):
-        """Compute depth metrics, to allow monitoring during training
-
-        This isn't particularly accurate as it averages over the entire batch,
-        so is only used to give an indication of validation performance
-        """
-        depth_pred = outputs[("depth", 0, 0)]
-        depth_pred = torch.clamp(F.interpolate(
-            depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
-        depth_pred = depth_pred.detach()
-
-        depth_gt = inputs["depth_gt"]
-        mask = depth_gt > 0
-
-        # garg/eigen crop
-        crop_mask = torch.zeros_like(mask)
-        crop_mask[:, :, 153:371, 44:1197] = 1
-        mask = mask * crop_mask
-
-        depth_gt = depth_gt[mask]
-        depth_pred = depth_pred[mask]
-        depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
-
-        depth_pred = torch.clamp(depth_pred, min=1e-3, max=80)
-
-        depth_errors = compute_depth_errors(depth_gt, depth_pred)
-
-        for i, metric in enumerate(self.depth_metric_names):
-            losses[metric] = np.array(depth_errors[i].cpu())
-
 
 class DDP_Trainer():
     def __init__(self, gpu_id, train_loader):
@@ -712,7 +700,7 @@ class DDP_Trainer():
         with open(os.path.join(models_dir, 'opt.json'), 'w') as f:
             json.dump(to_save, f, indent=2)
 
-    def eval(self):
+    def eval_depth_flow(self):
         """Flow and Depth Evaluation on a single minibatch
         Flow evaluation dataset:
 
@@ -727,26 +715,95 @@ class DDP_Trainer():
                 inputs = next(self.val_iter)
 
             with torch.no_grad():
-                outputs, losses = self.process_batch(inputs)
+                outputs, losses = self._run_batch(inputs, batch_idx=1)
 
-                if "depth_gt" in inputs and self.opt.depth_branch:
+                if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
+
         if self.opt.optical_flow:
-            from monodepth2.evaluation.evaluate_flow import evaluate_flow_online
-            with torch.no_grad():
-                eval_flow_result = evaluate_flow_online(
-                    self.log_path,
-                    checkpoint_path=os.path.join(self.log_path, "models", "weights_{}".format(self.epoch), "monoFlow.pth"),
-                    model_name=self.opt.model_name,
-                    epoch_idx=self.epoch,
-                    opt_main=self.opt)
-                writer = self.writers['val']
-                writer.add_scalar('kitti_epe', eval_flow_result['kitti_epe'], self.step)
-                writer.add_scalar('kitti_f1', eval_flow_result['kitti_f1'], self.step)
+            self.ddp_model.eval()
+            """ Peform validation using the KITTI-2015 (train) split """
+            val_dataset = flow_eval_datasets.KITTI(split='training', root=self.opt.val_data_root)
+            out_list, epe_list = [], []
+            save_path_dir = os.path.join(self.log_path, 'evaluate_flow_kitti')
+            os.makedirs(save_path_dir, exist_ok=True)
+            for val_id in range(len(val_dataset)):
+                image1_ori, image2_ori, flow_gt, valid_gt = val_dataset[val_id]
+                image1_ori = image1_ori[None].to(self.gpu_id)
+                image2_ori = image2_ori[None].to(self.gpu_id)
+                padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
+                image1, image2 = padder.pad(image1_ori, image2_ori)
+                with torch.no_grad():
+                    input_dict = {}
+                    # image1 = F.resize(image1, size=[192, 640], antialias=False)
+                    # image2 = F.resize(image2, size=[192, 640], antialias=False)
+                    input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                    image1, image2, image1
+                    out_dict = self.ddp_model(input_dict)
+                    flow_1_2 = out_dict['flow', -1, 0, 0][0]
+                flow = padder.unpad(flow_1_2).cpu()
+                epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
+                mag = torch.sum(flow_gt**2, dim=0).sqrt()
+
+                # vis
+                err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
+                err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
+                err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
+                to_save = mono_utils.stitching_and_show(img_list=[image1[0], flow, flow_gt, err_map_colored_tensor, image2[0]],
+                                                        ver=True, show=False)
+                save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
+                to_save.save(save_path)
+                epe = epe.view(-1)
+                mag = mag.view(-1)
+                val = valid_gt.view(-1) >= 0.5
+                out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
+                epe_list.append(epe[val].mean().item())
+                out_list.append(out[val].cpu().numpy())
+                print("\n Validation KITTI \n: %f, %f" % (epe[val].mean().item(), np.mean(out[val].cpu().numpy())))
+
+            epe_list = np.array(epe_list)
+            out_list = np.concatenate(out_list)
+            epe = np.mean(epe_list)
+            f1 = 100 * np.mean(out_list)
+            print("\n Validation KITTI \n: %f, %f" % (epe, f1))
+            writer = self.writers['val']
+            writer.add_scalar('kitti_epe', epe, self.step)
+            writer.add_scalar('kitti_f1', f1, self.step)
+
+
+    def compute_depth_losses(self, inputs, outputs, losses):
+        """Compute depth metrics, to allow monitoring during training
+        This isn't particularly accurate as it averages over the entire batch,
+        so is only used to give an indication of validation performance
+        """
+        depth_pred = outputs[("depth", 0, 0)]
+        depth_pred = torch.clamp(F.interpolate(
+            depth_pred, [375, 1242], mode="bilinear", align_corners=False), 1e-3, 80)
+        depth_pred = depth_pred.detach()
+
+        depth_gt = inputs["depth_gt"]
+        mask = depth_gt > 0
+
+        # garg/eigen crop
+        crop_mask = torch.zeros_like(mask)
+        crop_mask[:, :, 153:371, 44:1197] = 1
+        mask = mask * crop_mask
+
+        depth_gt = depth_gt[mask]
+        depth_pred = depth_pred[mask]
+        depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
+
+        depth_pred = torch.clamp(depth_pred, min=1e-3, max=80)
+
+        depth_errors = compute_depth_errors(depth_gt, depth_pred)
+
+        for i, metric in enumerate(self.depth_metric_names):
+            losses[metric] = np.array(depth_errors[i].cpu())
+
 
     def preprocess(self, inputs):
         """Resize colour images to the required scales and augment if required
@@ -784,6 +841,7 @@ class DDP_Trainer():
         #         inputs['color_aug', 1, 0][j],
         #     ], ver=True, show=True)
 
+
     def _run_batch(self, inputs, batch_idx):
         self.model_optimizer.zero_grad()
         start_batch_time = time.time()
@@ -798,10 +856,9 @@ class DDP_Trainer():
         late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
         if early_phase or late_phase:
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
-            if "depth_gt" in inputs and self.opt.depth_branch:
-                self.mono_loss.depth_evaluation(inputs, outputs, losses)
             self.log("train", inputs, outputs, losses)
         self.step += 1
+        return outputs, losses
 
     def _run_epoch(self):
         for batch_idx, inputs in enumerate(self.train_loader):
@@ -819,7 +876,7 @@ class DDP_Trainer():
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:
                 self.save_ddp_model()
-                self.eval()
+                self.eval_depth_flow()
 
 
 def ddp_setup(rank, world_size):
@@ -892,6 +949,7 @@ def model_test():
     print('time spent:', time.time() - t1)
     for k, v in outputs.items():
         print(k, v.shape)
+
 
 def use_single_gpu(gpu, tmpdataset):
     t1 = time.time()

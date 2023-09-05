@@ -555,8 +555,10 @@ class UPFlow_net(tools.abstract_model):
         if self.conf.if_sgu_upsample:
             feature_1_1x1 = self.sgi_model.output_conv(x1_raw)
             feature_2_1x1 = self.sgi_model.output_conv(x2_raw)
-            flow_f_out = self.self_guided_upsample(flow_up_bilinear=flow_f, feature_1=feature_1_1x1, feature_2=feature_2_1x1, output_level_flow=flow_f_out)
-            flow_b_out = self.self_guided_upsample(flow_up_bilinear=flow_b, feature_1=feature_2_1x1, feature_2=feature_1_1x1, output_level_flow=flow_b_out)
+            flow_f_out = self.self_guided_upsample(flow_up_bilinear=flow_f, feature_1=feature_1_1x1, 
+                                                   feature_2=feature_2_1x1, output_level_flow=flow_f_out)
+            flow_b_out = self.self_guided_upsample(flow_up_bilinear=flow_b, feature_1=feature_2_1x1, 
+                                                   feature_2=feature_1_1x1, output_level_flow=flow_b_out)
         else:
             pass
         return flow_f_out, flow_b_out, flows[::-1]

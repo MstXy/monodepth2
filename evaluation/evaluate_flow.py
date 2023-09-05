@@ -14,13 +14,14 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 cmap = plt.get_cmap('viridis')
-
-
 import monodepth2.datasets.flow_eval_datasets as datasets
 
 from monodepth2.utils import frame_utils
 from monodepth2.utils.utils import InputPadder, forward_interpolate
 import monodepth2.utils.utils as mono_utils
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+opt = options.parse()
 
 norm_trans = torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
 
@@ -356,7 +357,7 @@ def separate_inout_sintel_occ():
 
 
 @torch.no_grad()
-def validate_kitti(log_dir, model, inference_func, epoch_idx, opt_main):
+def validate_kitti(log_dir, model, inference_func, epoch_idx=0, opt_main=opt):
     """ Peform validation using the KITTI-2015 (train) split """
     model.eval()
     val_dataset = datasets.KITTI(split='training',
@@ -371,9 +372,9 @@ def validate_kitti(log_dir, model, inference_func, epoch_idx, opt_main):
         image2_ori = image2_ori[None].cuda()
         padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
         image1, image2 = padder.pad(image1_ori, image2_ori)
-        if opt_main.norm_trans:
-            image1 = norm_trans(image1)
-            image2 = norm_trans(image2)
+        # if opt_main.norm_trans:
+        #     image1 = norm_trans(image1)
+        #     image2 = norm_trans(image2)
 
         flow_ori = inference_func(model, image1, image2)
         flow = padder.unpad(flow_ori).cpu()
@@ -480,7 +481,8 @@ def evaluate_flow_MonoFlow(flow_branch='flownet'):
     model = MonoFlowNet(opt)
     # checkpoint_path ='/home/liu/data16t/Projects/test0618_basedON0616/' \
     #                 'monodepth2/networks/log/2023-08-21_13-05-33/mdp/models/weights_98plus29plus86/momoFlow.pth'
-    checkpoint_path = '/home/liu/data16t/Projects/monoflow_log/log/2023-08-27_21-06-22/MonoFlowNet/models/weights_32/momoFlow.pth'
+    checkpoint_path = '/home/wangshuo/LAB-Backup/Codes/mono_log/2023-09-02_02-17-17/MonoFlowNet/models/weights_71/monoFlow.pth'
+    
     print('loading from', checkpoint_path)
     model.load_state_dict(torch.load(checkpoint_path))
     model.cuda()
@@ -492,22 +494,17 @@ def evaluate_flow_MonoFlow(flow_branch='flownet'):
         input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
             image1, image2, image1
         out_dict = model(input_dict)
-        flow_1_2 = out_dict['flow_fwd'][0][0]
+        flow_1_2 = out_dict['flow', -1, 0, 0][0]
         return flow_1_2
-
-    validate_kitti(model, MonoFlow_inference_func, epoch_idx=32)
+    
+    # validate_kitti(model, MonoFlow_inference_func, epoch_idx=38)
+    validate_kitti('/home/wangshuo/LAB-Backup/Codes/mono_log/flow_eveal_test_2',model, MonoFlow_inference_func, epoch_idx=38)
 
 
 def evaluate_flow_online(log_dir, checkpoint_path, model_name, epoch_idx, opt_main):
-    from monodepth2.options import MonodepthOptions
-    options_eval = MonodepthOptions()
-    opt_eval = options_eval.parse()
-    opt_eval.depth_branch = False
-    opt_eval.batch_size = 1
-
     if model_name == 'MonoFlowNet':
         from monodepth2.networks.MonoFlowNet import MonoFlowNet
-        model = MonoFlowNet(opt_eval)
+        model = MonoFlowNet()
         print('loading from', checkpoint_path)
         model.load_state_dict(torch.load(checkpoint_path))
 

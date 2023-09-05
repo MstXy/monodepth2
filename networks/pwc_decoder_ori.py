@@ -30,7 +30,77 @@ def predict_flow(in_planes):
 def deconv(in_planes, out_planes, kernel_size=4, stride=2, padding=1):
     return nn.ConvTranspose2d(in_planes, out_planes, kernel_size, stride, padding, bias=True)
 
+class sgu_model(nn.Module):
+    def __init__(self):
+        super(sgu_model, self).__init__()
 
+        class FlowEstimatorDense_temp(nn.Module):
+
+            def __init__(self, ch_in, f_channels=(128, 128, 96, 64, 32), ch_out=2):
+                super(FlowEstimatorDense_temp, self).__init__()
+                N = 0
+                ind = 0
+                N += ch_in
+                self.conv1 = conv(N, f_channels[ind])
+                N += f_channels[ind]
+
+                ind += 1
+                self.conv2 = conv(N, f_channels[ind])
+                N += f_channels[ind]
+
+                ind += 1
+                self.conv3 = conv(N, f_channels[ind])
+                N += f_channels[ind]
+
+                ind += 1
+                self.conv4 = conv(N, f_channels[ind])
+                N += f_channels[ind]
+
+                ind += 1
+                self.conv5 = conv(N, f_channels[ind])
+                N += f_channels[ind]
+                self.num_feature_channel = N
+                ind += 1
+                self.conv_last = conv(N, ch_out, isReLU=False)
+
+            def forward(self, x):
+                x1 = torch.cat([self.conv1(x), x], dim=1)
+                x2 = torch.cat([self.conv2(x1), x1], dim=1)
+                x3 = torch.cat([self.conv3(x2), x2], dim=1)
+                x4 = torch.cat([self.conv4(x3), x3], dim=1)
+                x5 = torch.cat([self.conv5(x4), x4], dim=1)
+                x_out = self.conv_last(x5)
+                return x5, x_out
+        f_channels_es = (32, 32, 32, 16, 8)
+        in_C = 64
+        self.warping_layer = WarpingLayer_no_div()
+        self.dense_estimator_mask = FlowEstimatorDense_temp(in_C, f_channels=f_channels_es, ch_out=3)
+        self.upsample_output_conv = nn.Sequential(conv(3, 16, kernel_size=3, stride=1, dilation=1),
+                                                    conv(16, 16, stride=2),
+                                                    conv(16, 32, kernel_size=3, stride=1, dilation=1),
+                                                    conv(32, 32, stride=2), )
+
+    def forward(self, flow_init, feature_1, feature_2, output_level_flow=None):
+        n, c, h, w = flow_init.shape
+        n_f, c_f, h_f, w_f = feature_1.shape
+        if h != h_f or w != w_f:
+            flow_init = upsample2d_flow_as(flow_init, feature_1, mode="bilinear", if_rate=True)
+        feature_2_warp = self.warping_layer(feature_2, flow_init)
+        input_feature = torch.cat((feature_1, feature_2_warp), dim=1)
+        feature, x_out = self.dense_estimator_mask(input_feature)
+        inter_flow = x_out[:, :2, :, :]
+        inter_mask = x_out[:, 2, :, :]
+        inter_mask = torch.unsqueeze(inter_mask, 1)
+        inter_mask = torch.sigmoid(inter_mask)
+        n_, c_, h_, w_ = inter_flow.shape
+        if output_level_flow is not None:
+            inter_flow = upsample2d_flow_as(inter_flow, output_level_flow, mode="bilinear", if_rate=True)
+            inter_mask = upsample2d_flow_as(inter_mask, output_level_flow, mode="bilinear")
+            flow_init = output_level_flow
+        flow_up = tools.torch_warp(flow_init, inter_flow) * (1 - inter_mask) + flow_init * inter_mask
+        return flow_init, flow_up, inter_flow, inter_mask
+    def output_conv(self, x):
+        return self.upsample_output_conv(x)
 
 class PWCDecoder(nn.Module):
     """
@@ -134,6 +204,9 @@ class PWCDecoder(nn.Module):
         self.dc_conv6 = conv(64,       32,  kernel_size=3, stride=1, padding=1,  dilation=1)
         self.dc_conv7 = predict_flow(32)
 
+        self.pred_flow_up1 = conv(in_planes=2, out_planes=16, kernel_size=3, stride=1, padding=1)
+        self.pred_flow_up2 = conv(in_planes=16, out_planes=2, kernel_size=3, stride=1, padding=1)
+        
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
                 nn.init.kaiming_normal(m.weight.data, mode='fan_in')
@@ -274,24 +347,28 @@ class PWCDecoder(nn.Module):
  
         x = self.dc_conv4(self.dc_conv3(self.dc_conv2(self.dc_conv1(x))))
         flow2 = flow2 + self.dc_conv7(self.dc_conv6(self.dc_conv5(x)))
-        flow2 = F.interpolate(flow2, scale_factor=4, mode='bilinear', align_corners=True)
-        flow3 = F.interpolate(flow3, scale_factor=4, mode='bilinear', align_corners=True)
-        flow4 = F.interpolate(flow4, scale_factor=4, mode='bilinear', align_corners=True)
-        flow5 = F.interpolate(flow5, scale_factor=4, mode='bilinear', align_corners=True)
-        flow6 = F.interpolate(flow6, scale_factor=4, mode='bilinear', align_corners=True)
+        flow2 = self.upsample_conv(flow2)
+        flow3 = self.upsample_conv(flow3)
+        flow4 = self.upsample_conv(flow4)
+        flow5 = self.upsample_conv(flow5)
+        flow6 = self.upsample_conv(flow6)
+        out = {'level0':flow2, 'level1':flow3, 'level2':flow4, 'level3':flow5, 'level4':flow6}
+        return out
+    
+        # if self.training:
+        #     out = {'level0':flow2, 'level1':flow3, 'level2':flow4, 'level3':flow5, 'level4':flow6}
+        #     return out
+        # else:
+        #     return flow2
 
 
-        if self.training:
-            out = {'level0':flow2, 'level1':flow3, 'level2':flow4, 'level3':flow5, 'level4':flow6}
-            return out
-        else:
-            return flow2
-
-
-
-
-
-
+    def upsample_conv(self, flow_init):
+        '''get upsampled output flow'''
+        flow_up_1 = F.interpolate(flow_init, scale_factor=2, mode='bilinear', align_corners=True)
+        flow_up_1 = self.pred_flow_up2(self.pred_flow_up1(flow_up_1))
+        flow_up_2 = F.interpolate(flow_up_1, scale_factor=2, mode='bilinear', align_corners=True)
+        flow_up_2 = self.pred_flow_up2(self.pred_flow_up1(flow_up_2))
+        return flow_up_2
 
 
 
