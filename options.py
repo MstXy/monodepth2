@@ -90,6 +90,29 @@ class MonodepthOptions:
                                  type=int,
                                  help="step size of the scheduler",
                                  default=15)
+        # LOSS WEIGHTS
+        self.parser.add_argument("--loss_smo1_w",
+                                 type=float,
+                                 help="smoothness weight order 1",
+                                 default=10.0)
+        
+        self.parser.add_argument("--loss_smo2_w",
+                                    type=float,
+                                    help="smoothness weight order2",
+                                    default=10.0)
+        
+        self.parser.add_argument("--loss_l1_w",
+                                 type=float,
+                                 help="weight for l1 loss",
+                                 default=0.25)
+        
+        self.parser.add_argument("--loss_ssim_w",
+                                 type=float,
+                                 help="weight for ssim loss",
+                                 default=0.75)
+        
+        
+        
 
         # optical flow branch ----------------
         self.parser.add_argument("--optical_flow",

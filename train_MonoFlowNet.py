@@ -205,18 +205,18 @@ class MonoFlowLoss():
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
                                                 photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
-        flow_loss["photo_loss_l1"] = photo_loss_l1 * 0.15
-        flow_loss["photo_loss_ssim"] = photo_loss_ssim * 0.85
+        flow_loss["photo_loss_l1"] = photo_loss_l1
+        flow_loss["photo_loss_ssim"] = photo_loss_ssim
         # ===== smooth loss calculation:
-        # smo_loss_o1 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
-        #            self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
+        smo_loss_o1 = self.edge_aware_smoothness_order1(img=img1, pred=flow_1_2) + \
+                   self.edge_aware_smoothness_order1(img=img2, pred=flow_2_1)
         smo_loss_o2 = self.edge_aware_smoothness_order2(img=img1, pred=flow_1_2) + \
                    self.edge_aware_smoothness_order2(img=img2, pred=flow_2_1)
         # ===== census loss calculation:
 
         # ===== multi scale distillation loss calculation:
 
-        flow_loss["smo_loss_o1"] = 0
+        flow_loss["smo_loss_o1"] = smo_loss_o1
         flow_loss["smo_loss_o2"] = smo_loss_o2
         return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
 
@@ -226,6 +226,7 @@ class MonoFlowLoss():
         """
         losses = {}
         losses["flow_loss"] = 0
+        
         total_loss = 0
         if self.opt.optical_flow:
             # compute flow losses, warp img, calculate occ map
@@ -254,12 +255,14 @@ class MonoFlowLoss():
                 outputs[('occ', 0, 1, scale)] = occ_1_2
                 outputs[('occ', 1, 0, scale)] = occ_2_1
 
-                losses["smo_loss_o1", scale] = (flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]) * 50 if scale in [2, 3] else 0 
-                losses["smo_loss_o2", scale] = (flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]) * 50 if scale in [2, 3] else 0 
-                losses["photo_loss_l1", scale] = (flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]) * 0.35 * math.exp(-scale)
-                losses["photo_loss_ssim", scale] = (flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"] ) * 0.65 * math.exp(-scale)
+                losses["smo_loss_o1", scale] = (flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]) * opt.loss_smo1_w if scale in [2, 3] else 0 
+                losses["smo_loss_o2", scale] = (flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]) * opt.loss_smo2_w if scale in [2, 3] else 0 
+                losses["photo_loss_l1", scale] = (flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]) * opt.loss_l1_w * math.exp(-scale)
+                losses["photo_loss_ssim", scale] = (flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"] ) * opt.loss_ssim_w * math.exp(-scale)
                 losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
                                         losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
+
+                # losses["flow_norm"] += torch.mean(torch.abs(outputs['flow', -1, 0, scale]), dim=0) * 1e-4
 
             total_loss += losses["flow_loss"]
 
@@ -550,7 +553,7 @@ class DDP_Trainer():
         if self.opt.model_name == "MonoFlowNet":
             self.model = MonoFlowNet(opt)
         elif self.opt.model_name == "UnFlowNet":
-            self.model = UnFlowNet()
+            self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
 
         self.model_optimizer = optim.Adam(self.model.parameters(), self.opt.learning_rate)
         if self.opt.load_weights_folder is not None:
@@ -774,7 +777,6 @@ class DDP_Trainer():
             writer.add_scalar('kitti_epe', epe, self.step)
             writer.add_scalar('kitti_f1', f1, self.step)
 
-
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
         This isn't particularly accurate as it averages over the entire batch,
@@ -803,7 +805,6 @@ class DDP_Trainer():
 
         for i, metric in enumerate(self.depth_metric_names):
             losses[metric] = np.array(depth_errors[i].cpu())
-
 
     def preprocess(self, inputs):
         """Resize colour images to the required scales and augment if required
@@ -841,7 +842,6 @@ class DDP_Trainer():
         #         inputs['color_aug', 1, 0][j],
         #     ], ver=True, show=True)
 
-
     def _run_batch(self, inputs, batch_idx):
         self.model_optimizer.zero_grad()
         start_batch_time = time.time()
@@ -852,7 +852,7 @@ class DDP_Trainer():
         self.model_optimizer.step()
 
         # ===== log
-        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000 and not self.opt.debug and self.is_master_node
+        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 10000 and not self.opt.debug and self.is_master_node
         late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
         if early_phase or late_phase:
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
