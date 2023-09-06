@@ -134,6 +134,9 @@ class PWCDecoder(nn.Module):
         # self.conv6b  = conv(196,196, kernel_size=3, stride=1)
 
         # self.corr    = Correlation(pad_size=md, kernel_size=1, max_displacement=md, stride1=1, stride2=1, corr_multiply=1)
+        self.corr_block = correlation.FunctionCorrelation
+        
+
         self.leakyRELU = nn.LeakyReLU(0.1)
 
         self.conv_feat_scale1 = conv(64, 16, kernel_size=3, stride=1, padding=1)  # 1->2
@@ -223,24 +226,20 @@ class PWCDecoder(nn.Module):
 
         """
         B, C, H, W = x.size()
+        device = x.device
         # mesh grid 
-        xx = torch.arange(0, W).view(1,-1).repeat(H,1)
-        yy = torch.arange(0, H).view(-1,1).repeat(1,W)
+        xx = torch.arange(0, W, device=device).view(1,-1).repeat(H,1)
+        yy = torch.arange(0, H, device=device).view(-1,1).repeat(1,W)
         xx = xx.view(1,1,H,W).repeat(B,1,1,1)
         yy = yy.view(1,1,H,W).repeat(B,1,1,1)
         grid = torch.cat((xx,yy),1).float()
-
-        if x.is_cuda:
-            grid = grid.cuda()
         vgrid = Variable(grid) + flo
-
         # scale grid to [-1,1] 
         vgrid[:,0,:,:] = 2.0*vgrid[:,0,:,:].clone() / max(W-1,1)-1.0
         vgrid[:,1,:,:] = 2.0*vgrid[:,1,:,:].clone() / max(H-1,1)-1.0
-
         vgrid = vgrid.permute(0,2,3,1)        
         output = nn.functional.grid_sample(x, vgrid)
-        mask = torch.autograd.Variable(torch.ones(x.size())).cuda()
+        mask = torch.autograd.Variable(torch.ones(x.size(), device=device))
         mask = nn.functional.grid_sample(mask, vgrid)
 
         # if W==128:
@@ -278,7 +277,7 @@ class PWCDecoder(nn.Module):
         c16, c26 = self.conv_scale5_to_scale_6(c15), self.conv_scale5_to_scale_6(c25)  # feature_1&2_level_6; (196, 3, 10), 1/64 scale
 
 
-        corr6 = correlation.FunctionCorrelation(c16, c26)
+        corr6 = self.corr_block(c16, c26)
         corr6 = self.leakyRELU(corr6)
         x = torch.cat((self.conv6_0(corr6), corr6),1)
         x = torch.cat((self.conv6_1(x), x),1)
@@ -291,7 +290,7 @@ class PWCDecoder(nn.Module):
 
         
         warp5 = self.warp(c25, up_flow6*0.625)
-        corr5 = correlation.FunctionCorrelation(c15, warp5) 
+        corr5 = self.corr_block(c15, warp5) 
         corr5 = self.leakyRELU(corr5)
         x = torch.cat((corr5, c15, up_flow6, up_feat6), 1)
         x = torch.cat((self.conv5_0(x), x),1)
@@ -305,7 +304,7 @@ class PWCDecoder(nn.Module):
 
        
         warp4 = self.warp(c24, up_flow5*1.25)
-        corr4 = correlation.FunctionCorrelation(c14, warp4)  
+        corr4 = self.corr_block(c14, warp4)  
         corr4 = self.leakyRELU(corr4)
         x = torch.cat((corr4, c14, up_flow5, up_feat5), 1)
         x = torch.cat((self.conv4_0(x), x),1)
@@ -319,7 +318,7 @@ class PWCDecoder(nn.Module):
 
 
         warp3 = self.warp(c23, up_flow4*2.5)
-        corr3 = correlation.FunctionCorrelation(c13, warp3) 
+        corr3 = self.corr_block(c13, warp3) 
         corr3 = self.leakyRELU(corr3)
         
 
@@ -335,7 +334,7 @@ class PWCDecoder(nn.Module):
 
 
         warp2 = self.warp(c22, up_flow3*5.0) 
-        corr2 = correlation.FunctionCorrelation(c12, warp2)
+        corr2 = self.corr_block(c12, warp2)
         corr2 = self.leakyRELU(corr2)
         x = torch.cat((corr2, c12, up_flow3, up_feat3), 1)
         x = torch.cat((self.conv2_0(x), x),1)

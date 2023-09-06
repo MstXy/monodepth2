@@ -196,7 +196,7 @@ def torch_warp(img2, flow):
     B, _, H, W = img2.size()
 
     meshgrid = np.meshgrid(range(W), range(H), indexing='xy')
-    meshgrid = torch.Tensor(np.stack(meshgrid, axis=0).astype(np.float32)).to(device)
+    meshgrid = torch.tensor(np.stack(meshgrid, axis=0).astype(np.float32), device=device)
     img2_coor = meshgrid.repeat(B, 1, 1, 1) + flow
 
     # scale to [0,1]
@@ -420,7 +420,7 @@ def create_mask(tensor, paddings):
     shape = tensor.shape  # B, C, H, W
     inner_width = shape[3] - (paddings[1][0] + paddings[1][1])
     inner_height = shape[2] - (paddings[0][0] + paddings[0][1])
-    inner = torch.ones((inner_height, inner_width)).to(tensor.device)
+    inner = torch.ones((inner_height, inner_width), device=tensor.device)
 
     mask2d = torch.nn.ZeroPad2d((paddings[1][0], paddings[1][1], paddings[0][0], paddings[0][1]))(inner)
     # padding_left, padding_right, padding_top, padding_bottom

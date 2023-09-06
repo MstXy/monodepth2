@@ -42,19 +42,12 @@ options = MonodepthOptions()
 opt = options.parse()
 fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
 
-
-
-
-
-
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 cmap = plt.get_cmap('viridis')
 import monodepth2.datasets.flow_eval_datasets as flow_eval_datasets
 from monodepth2.utils import frame_utils
 from monodepth2.utils.utils import InputPadder, forward_interpolate
-
-
 
 
 IF_DEBUG = False
@@ -66,6 +59,9 @@ if IF_DEBUG:
     #     pdb.pm()  # post-mortem debugger
     # sys.excepthook = debughook
 
+print(torch.get_num_threads())
+torch.set_num_threads(10)
+print(torch.get_num_threads())
 
 class SSIM(nn.Module):
     """Layer to compute the SSIM loss between a pair of images
@@ -726,7 +722,6 @@ class DDP_Trainer():
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
-
         if self.opt.optical_flow:
             self.ddp_model.eval()
             """ Peform validation using the KITTI-2015 (train) split """
@@ -766,7 +761,6 @@ class DDP_Trainer():
                 out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
                 epe_list.append(epe[val].mean().item())
                 out_list.append(out[val].cpu().numpy())
-                print("\n Validation KITTI \n: %f, %f" % (epe[val].mean().item(), np.mean(out[val].cpu().numpy())))
 
             epe_list = np.array(epe_list)
             out_list = np.concatenate(out_list)
