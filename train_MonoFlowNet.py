@@ -35,13 +35,14 @@ import monodepth2.utils.utils as mono_utils
 from monodepth2.UPFlow_pytorch.utils.tools import tools as uptools
 import monodepth2.networks as networks
 from monodepth2.layers import *
-from monodepth2.options import MonodepthOptions
+
 from monodepth2.networks.MonoFlowNet import MonoFlowNet
 from monodepth2.networks.UnFlowNet import UnFlowNet
+from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
-fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
 
+fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 cmap = plt.get_cmap('viridis')
@@ -96,7 +97,6 @@ class SSIM(nn.Module):
 
         return torch.clamp((1 - SSIM_n / SSIM_d) / 2, 0, 1)
 
-
 class MonoFlowLoss():
     def __init__(self):
         self.opt = opt
@@ -113,6 +113,14 @@ class MonoFlowLoss():
 
         if not self.opt.no_ssim:
             self.ssim = SSIM()
+            
+        # frame_id and idx_pair_list
+        if len(self.opt.frame_ids) == 3:
+            self.idx_pair_list = [(-1, 0), (0, 1)]
+        elif len(self.opt.frame_ids) == 2:
+            self.idx_pair_list = [(-1, 0)]
+        else:
+            raise NotImplementedError 
 
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch, by depth info and flow info both.
@@ -222,50 +230,47 @@ class MonoFlowLoss():
         """
         losses = {}
         losses["flow_loss"] = 0
-        
         total_loss = 0
         if self.opt.optical_flow:
             # compute flow losses, warp img, calculate occ map
             for scale in self.opt.scales:
-                # prev(-1) to curr(0)
-                flow_loss_1, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
-                    img1=inputs[("color_aug", -1, scale)],
-                    img2=inputs[("color_aug", 0, scale)],
-                    flow_1_2=outputs[('flow', -1, 0, scale)],  # flow -1 to 0 (flow_prev_to_curr)
-                    flow_2_1=outputs[('flow', 0, -1, scale)],  # flow 0 to -1 (flow_curr_to_prev)
-                    name="prev_curr")
-                outputs[('f_warped', -1, 0, scale)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
-                outputs[('f_warped', 0, -1, scale)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
-                outputs[('occ', -1, 0, scale)] = occ_1_2
-                outputs[('occ', 0, -1, scale)] = occ_2_1
+                tmp_smooth_o1_loss = 0
+                tmp_smooth_o2_loss = 0
+                tmp_photo_l1_loss = 0
+                tmp_photo_ssim_loss = 0
+                
+                for idx_pair in self.idx_pair_list:
+                    # prev(-1) to curr(0)
+                    flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                        img1=inputs[("color_aug", idx_pair[0], scale)],
+                        img2=inputs[("color_aug", idx_pair[1], scale)],
+                        flow_1_2=outputs[('flow', idx_pair[0], idx_pair[1], scale)],  # flow -1 to 0 (flow_prev_to_curr)
+                        flow_2_1=outputs[('flow', idx_pair[1], idx_pair[0], scale)],  # flow 0 to -1 (flow_curr_to_prev)
+                        name=idx_pair)
+                    outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
+                    outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
+                    outputs[('occ', idx_pair[0], idx_pair[1], scale)] = occ_1_2
+                    outputs[('occ', idx_pair[1], idx_pair[0], scale)] = occ_2_1
 
-                # curr(0) to next(1)
-                flow_loss_2, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
-                    img1=inputs["color_aug", 0, scale],
-                    img2=inputs["color_aug", 1, scale],
-                    flow_1_2=outputs[('flow', 0, 1, scale)],  # flow 0 to 1 (flow_curr_to_next)
-                    flow_2_1=outputs[('flow', 1, 0, scale)],  # flow 1 to 0 (flow_next_to_curr)
-                    name="curr_next")
-                outputs[('f_warped', 0, 1, scale)] = img1_warped  # curr_img warped by next_img and flow_curr_to_next
-                outputs[('f_warped', 1, 0, scale)] = img2_warped   # next_img warped by curr_img and flow_next_to_curr
-                outputs[('occ', 0, 1, scale)] = occ_1_2
-                outputs[('occ', 1, 0, scale)] = occ_2_1
-
-                losses["smo_loss_o1", scale] = (flow_loss_1["smo_loss_o1"] + flow_loss_2["smo_loss_o1"]) * opt.loss_smo1_w if scale in [2, 3] else 0 
-                losses["smo_loss_o2", scale] = (flow_loss_1["smo_loss_o2"] + flow_loss_2["smo_loss_o2"]) * opt.loss_smo2_w if scale in [2, 3] else 0 
-                losses["photo_loss_l1", scale] = (flow_loss_1["photo_loss_l1"] + flow_loss_2["photo_loss_l1"]) * opt.loss_l1_w * math.exp(-scale)
-                losses["photo_loss_ssim", scale] = (flow_loss_1["photo_loss_ssim"] + flow_loss_2["photo_loss_ssim"] ) * opt.loss_ssim_w * math.exp(-scale)
+                    tmp_smooth_o1_loss += flow_loss["smo_loss_o1"]
+                    tmp_smooth_o2_loss += flow_loss["smo_loss_o2"]
+                    tmp_photo_l1_loss += flow_loss["photo_loss_l1"]
+                    tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
+                losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w if scale in [2, 3] else 0 
+                losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w if scale in [2, 3] else 0 
+                losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w * math.exp(-scale)
+                losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w * math.exp(-scale)
                 losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
                                         losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
 
-                # losses["flow_norm"] += torch.mean(torch.abs(outputs['flow', -1, 0, scale]), dim=0) * 1e-4
-
             total_loss += losses["flow_loss"]
+
 
         # if self.opt.optical_flow in ['upflow']:
         #     self.flow_warp(inputs, outputs)
         #     total_loss += outputs['loss_by_upflow']
         #     raise NotImplementedError
+        
         
         if self.opt.depth_branch:
             for scale in self.opt.scales:
@@ -495,8 +500,77 @@ class MonoFlowLoss():
         return alpha * ssim_loss + (1-alpha) * l1_loss
 
 
+def load_train_objs():
+    # ====== 1.train dataset: kitti flow and depth
+    if opt.train_dataset in ['kitti']:
+        train_filenames = mono_utils.readlines(fpath.format("train"))
+        train_dataset = datasets.KITTIRAWDataset(
+            opt.data_path, train_filenames, opt.height, opt.width,
+            opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not opt.depth_branch and opt.optical_flow))
+    
+    elif opt.train_dataset in ['kitti_odom']:
+        train_filenames = mono_utils.readlines(fpath.format("train"))
+        train_dataset = datasets.KITTIOdomDataset(
+            opt.data_path, train_filenames, opt.height, opt.width,
+            opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not opt.depth_branch and opt.optical_flow))
+        
+    elif opt.train_dataset in ['kitti_mv2015']:
+        train_dataset = datasets.KITTI_MV_2015()
+    
+    elif opt.train_dataset in ['FlyingChairs']:
+        train_dataset = flow_eval_datasets.FlyingChairs(root=opt.data_path_FlyingChairs, aug_params=None, split='training')
+        # opt.height = 384
+        # opt.width = 512
+        opt.frame_ids=[-1, 0]
+    
+    # ====== 2.train dataset: kitti
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=opt.batch_size,
+        num_workers=opt.num_workers,
+        pin_memory=True,
+        shuffle=True,
+        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
+        drop_last=True
+    )
+
+    # ====== 2.eval dataset: depth
+
+    # ====== 3.eval dataset: flow
+
+    return train_dataset, train_dataloader
+
+
+def load_val_objs():
+    if opt.val_dataset in ['kitti']:
+        val_filenames = mono_utils.readlines(fpath.format("val"))
+        val_dataset = datasets.KITTIRAWDataset(
+            opt.data_path, val_filenames, opt.height, opt.width,
+            opt.frame_ids, 4, is_train=False, img_ext='.png')
+        val_loader = DataLoader(
+            val_dataset, opt.batch_size, True,
+            num_workers=opt.num_workers, pin_memory=False, drop_last=True)
+    return val_dataset, val_loader
+
+
+def prepare_dataloader(dataset):
+    return DataLoader(
+        dataset,
+        batch_size=opt.batch_size,
+        num_workers=opt.num_workers,
+        pin_memory=True,
+        shuffle=True,
+        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
+        drop_last=True
+    )
+
+
+
+
+
 class DDP_Trainer():
-    def __init__(self, gpu_id, train_loader):
+    def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
         self.gpu_id = gpu_id
         self.is_master_node = (self.gpu_id == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if opt.ddp else True
@@ -504,24 +578,22 @@ class DDP_Trainer():
         self.train_loader = train_loader
         ############### val dataset ###############
         
-        datasets_dict = {"kitti": datasets.KITTIRAWDataset,
-                         "kitti_odom": datasets.KITTIOdomDataset}
-        self.dataset = datasets_dict[opt.dataset]
-        self.train_filenames = mono_utils.readlines(fpath.format("train"))
-        img_ext = '.png'
-        num_train_samples = len(self.train_filenames)
+        num_train_samples = len(train_dataset)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
-        self.val_filenames = mono_utils.readlines(fpath.format("val"))
-        self.val_dataset = self.dataset(
-            self.opt.data_path, self.val_filenames, self.opt.height, self.opt.width,
-            self.opt.frame_ids, 4, is_train=False, img_ext=img_ext)
-        self.val_loader = DataLoader(
-            self.val_dataset, self.opt.batch_size, True,
-            num_workers=self.opt.num_workers, pin_memory=False, drop_last=True)
+        self.val_dataset = val_dataset
+        self.val_loader = val_loader
         self.val_iter = iter(self.val_loader)
 
         #################### input augmentation ####################
         self.num_scales = len(self.opt.scales)
+        # frame_id and idx_pair_list
+        if len(self.opt.frame_ids) == 3:
+            self.idx_pair_list = [(-1, 0), (0, 1)]
+        elif len(self.opt.frame_ids) == 2:
+            self.idx_pair_list = [(-1, 0)]
+        else:
+            raise NotImplementedError 
+        
         self.to_tensor = transforms.ToTensor()
         # We need to specify augmentations differently in newer versions of torchvision.
         # We first try the newer tuple version; if this fails we fall back to scalars
@@ -577,7 +649,7 @@ class DDP_Trainer():
             self.save_opts()
             print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using: device cuda:", self.gpu_id)
-
+        
     def load_ddp_model(self):
         """Load model(s) from disk
         """
@@ -588,7 +660,6 @@ class DDP_Trainer():
         chechpoint_path = os.path.join(self.opt.load_weights_folder, "monoFlow.pth")
         self.model.load_state_dict(
             torch.load(chechpoint_path, map_location='cpu'))
-
 
         # loading adam state
         optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam.pth")
@@ -631,7 +702,9 @@ class DDP_Trainer():
                 continue
             else:
                 writer.add_scalar("{}".format(l), v, self.step)
-        writer.add_scalar("flow_mean", torch.mean(torch.abs(outputs['flow', -1, 0, 0][0])), self.step)
+        # writer.add_scalar("flow_mean", torch.mean(
+        #     torch.abs(outputs['flow', self.idx_pair_list[0][0], self.idx_pair_list[0][1], 0][0])
+        #     ), self.step)
 
         for scale in opt.scales:
             writer.add_scalar("smo_loss_o1/scale{}".format(scale), losses["smo_loss_o1", scale], self.step)
@@ -642,24 +715,15 @@ class DDP_Trainer():
 
         for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
             if self.opt.optical_flow is not None:
-                # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
-                prev_curr_and_flow = mono_utils.log_vis_1(inputs, outputs, -1, 0, j)
-                curr_next_and_flow = mono_utils.log_vis_1(inputs, outputs, 0, 1, j)
-
-                # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
-                prev_warped_prev_and_diff = \
-                    mono_utils.log_vis_2(inputs, outputs, -1, 0, j)
-                curr_warped_curr_and_diff = \
-                    mono_utils.log_vis_2(inputs, outputs, 0, 1, j)
-
-                writer.add_image('1.Curr_2.OccPrevCurr_3.FlowPrevCurr_4.Prev/{}'.format(j),
-                                 prev_curr_and_flow, self.step)
-                writer.add_image('1.Next_2.OccCurrNext_3.FlowCurrNext_4.Curr/{}'.format(j),
-                                 curr_next_and_flow, self.step)
-                writer.add_image('1.Diff_2.DiffMasked_3.WarpedPrev_4.Prev_5.FlowPrevCurr/{}'.format(j),
-                                 prev_warped_prev_and_diff, self.step)
-                writer.add_image('1.Diff_2.DiffMasked_3.WarpedCurr_4.Curr_5.FlowCurrNext/{}'.format(j),
-                                 curr_warped_curr_and_diff, self.step)
+                for idx_pair in self.idx_pair_list:
+                    # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
+                    img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1], j)
+                    # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
+                    img1_warped_img1_diff = mono_utils.log_vis_2(inputs, outputs, idx_pair[0], idx_pair[1], j)
+                    writer.add_image('1.Img2_||_2.OccImg1->Img2_||_3.FlowImg1->Img2_||_4.Img1._||_IdxPair{},{}/{}'.
+                                     format(idx_pair[0], idx_pair[1], j),img1_img2_flow, self.step)
+                    writer.add_image('1.Diff_||_2.DiffMasked_||_3.WarpedImg1_||_4.SourceImg1_||_5.FlowImg1->Img2_||_IdxPair{},{}/{}'.
+                                     format(idx_pair[0], idx_pair[1], j), img1_warped_img1_diff, self.step)
 
             if self.opt.depth_branch:
                 for s in self.opt.scales:
@@ -808,19 +872,14 @@ class DDP_Trainer():
         todo:
         https://stackoverflow.com/questions/65447992/pytorch-how-to-apply-the-same-random-transformation-to-multiple-image
         """
-        color_aug = transforms.ColorJitter(
-            self.brightness, self.contrast, self.saturation, self.hue)
+        # color_aug = transforms.ColorJitter(
+        #     self.brightness, self.contrast, self.saturation, self.hue)
+
         for k in list(inputs):
-            frame = inputs[k]
             if "color" in k:
                 n, im, _ = k
                 for i in range(1, self.num_scales):
-                    if opt.norm_trans:
-                        inputs[(n, im, i)] = self.norm_trans(
-                            self.resize[i](inputs[(n, im, i - 1)])
-                        )
-                    else:
-                        inputs[(n, im, i)] =self.resize[i](inputs[(n, im, i - 1)])
+                    inputs[(n, im, i)] =self.resize[i](inputs[(n, im, i - 1)])
 
         for k in list(inputs):
             f = inputs[k]
@@ -828,7 +887,8 @@ class DDP_Trainer():
                 n, im, i = k
                 # inputs[(n, im, i)] = (self.to_tensor(f))
                 inputs[(n + "_aug", im, i)] = f
-
+        
+        # visualize
         # for j in range(inputs['color_aug', -1, 0].size()[0]):
         #     mono_utils.stitching_and_show(img_list=[
         #         inputs['color_aug', -1, 0][j],
@@ -846,7 +906,7 @@ class DDP_Trainer():
         self.model_optimizer.step()
 
         # ===== log
-        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 10000 and not self.opt.debug and self.is_master_node
+        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000 and not self.opt.debug and self.is_master_node
         late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
         if early_phase or late_phase:
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
@@ -884,34 +944,6 @@ def ddp_setup(rank, world_size):
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
 
-
-def load_train_objs():
-    # ====== 1.train dataset: flow and depth
-    datasets_dict = {"kitti": datasets.KITTIRAWDataset,
-                     "kitti_odom": datasets.KITTIOdomDataset}
-    dataset = datasets_dict[opt.dataset]
-    train_filenames = mono_utils.readlines(fpath.format("train"))
-    train_dataset = dataset(
-        opt.data_path, train_filenames, opt.height, opt.width,
-        opt.frame_ids, 4, is_train=True, img_ext='.png')
-
-    # ====== 2.eval dataset: depth
-
-    # ====== 3.eval dataset: flow
-
-    return train_dataset
-
-
-def prepare_dataloader(dataset):
-    return DataLoader(
-        dataset,
-        batch_size=opt.batch_size,
-        num_workers=opt.num_workers,
-        pin_memory=True,
-        shuffle=True,
-        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
-        drop_last=True
-    )
 
 
 def main(rank: int, world_size: int):
@@ -956,9 +988,7 @@ def use_single_gpu(gpu, tmpdataset):
     t2 = 0
 
     def preprocess(self, inputs):
-
         """Resize colour images to the required scales and augment if required
-
                 We create the color_aug object in advance and apply the same augmentation to all
                 images in this item. This ensures that all images input to the pose network receive the
                 same augmentation.
@@ -999,59 +1029,10 @@ if __name__ == "__main__":
         # world_size = torch.cuda.device_count()
         mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
     else:
-        dataset = load_train_objs()
-        train_loader = prepare_dataloader(dataset)
-        trainer = DDP_Trainer(gpu_id=int(opt.device[-1]), train_loader=train_loader)
+        train_dataset, train_loader = load_train_objs()
+        val_dataset, val_loader = load_val_objs()
+        trainer = DDP_Trainer(int(opt.device[-1]), train_dataset, train_loader,
+                              val_dataset, val_loader)
         trainer.train()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

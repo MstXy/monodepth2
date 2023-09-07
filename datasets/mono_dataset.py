@@ -24,12 +24,15 @@ opts = options.parse()
 
 
 
+# def pil_loader(path):
+#     # open path as file to avoid ResourceWarning
+#     # (https://github.com/python-pillow/Pillow/issues/835)
+#     with open(path, 'rb') as f:
+#         with Image.open(f) as img:
+#             return img.convert('RGB')
+        
 def pil_loader(path):
-    # open path as file to avoid ResourceWarning
-    # (https://github.com/python-pillow/Pillow/issues/835)
-    with open(path, 'rb') as f:
-        with Image.open(f) as img:
-            return img.convert('RGB')
+    return Image.open(path).convert('RGB')
 
 
 class MonoDataset(data.Dataset):
@@ -53,7 +56,8 @@ class MonoDataset(data.Dataset):
                  frame_idxs,
                  num_scales,
                  is_train=False,
-                 img_ext='.jpg'):
+                 img_ext='.jpg',
+                 color_only=False):
         super(MonoDataset, self).__init__()
         self.device = opts.device
 
@@ -68,6 +72,7 @@ class MonoDataset(data.Dataset):
 
         self.is_train = is_train
         self.img_ext = img_ext
+        self.color_only = color_only
 
         self.loader = pil_loader
         self.to_tensor = transforms.ToTensor()
@@ -148,8 +153,7 @@ class MonoDataset(data.Dataset):
 
 
         inputs = {}
-
-        do_color_aug = self.is_train and random.random() > 0.5
+        # do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and random.random() > 0.5
 
         line = self.filenames[index].split()
@@ -171,7 +175,17 @@ class MonoDataset(data.Dataset):
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + int(i.split("_")[1]), other_side, do_flip)
             else:
                 inputs[("color", i, -1)] = self.get_color(folder, frame_index + i, side, do_flip)
-
+        
+        
+        for k in list(inputs):
+            if "color" in k:
+                n, im, i = k
+                inputs[(n, im, 0)] = self.to_tensor(self.resize[0](inputs[(n, im, -1)]))
+                del inputs[("color", im, -1)]
+                
+        if self.color_only:
+            return inputs
+        
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):
             K = self.K.copy()
@@ -183,26 +197,6 @@ class MonoDataset(data.Dataset):
 
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
-
-        #
-        if do_color_aug:
-            color_aug = transforms.ColorJitter(
-                self.brightness, self.contrast, self.saturation, self.hue)
-        else:
-            color_aug = lambda x: x
-
-        # self.preprocess(inputs, color_aug)
-        # for i in self.frame_idxs:
-        #     del inputs[("color", i, -1)]
-        #     del inputs[("color_aug", i, -1)]
-
-
-        for k in list(inputs):
-            if "color" in k:
-                n, im, i = k
-                inputs[(n, im, 0)] = self.resize[0](inputs[(n, im, -1)])
-                inputs[(n, im, 0)] = self.to_tensor(inputs[(n, im, 0)])
-                del inputs[("color", im, -1)]
 
 
         if self.load_depth:
@@ -216,7 +210,6 @@ class MonoDataset(data.Dataset):
             baseline_sign = -1 if do_flip else 1
             side_sign = -1 if side == "l" else 1
             stereo_T[0, 3] = side_sign * baseline_sign * 0.1
-
             inputs["stereo_T"] = torch.from_numpy(stereo_T)
 
         return inputs

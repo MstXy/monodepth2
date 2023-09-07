@@ -25,6 +25,22 @@ class MonodepthOptions:
                                  # default=os.path.join(file_dir, "kitti_data")
                                  default="/mnt/km-nfs/ns100002-share/KITTI_raw"
                                  )
+        self.parser.add_argument("--data_path_FlyingChairs",
+                                 help="paht to flyingchairs dataset",
+                                 type=str,
+                                 default="/mnt/km-nfs/ns100002-share/FlyingChairs_release/data")
+        self.parser.add_argument("--data_path_FlyingThings3D",
+                                    type=str,
+                                    default="/mnt/km-nfs/ns100002-share/FlyingThings3D_subset/train")
+        
+        self.parser.add_argument("--data_path_MpiSintel",
+                                    type=str,
+                                    default="/mnt/km-nfs/ns100002-share/MPI-Sintel-complete")
+        
+        self.parser.add_argument("--data_path_KITTI_mv15",
+                                    type=str, 
+                                    default="/home/wangshuo/LAB-Backup/Data/kitti/data_scene_flow_multiview")
+    
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
@@ -35,6 +51,17 @@ class MonodepthOptions:
                                  help='flow valuation kitti dataset root dir',
                                  default='/mnt/km-nfs/ns100002-share/data_scene_flow')
         
+        self.parser.add_argument("--train_dataset",
+                                 type=str,
+                                 help="dataset to train on",
+                                 default="kitti",
+                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test", "FlyingChairs"])
+        
+        self.parser.add_argument("--val_dataset",
+                                 type=str,
+                                 help="dataset to validate on",
+                                 default="kitti",
+                                 choices=["kitti", "kitti_odom", "FlyingChairs"])
         
         # LOADING options
         self.parser.add_argument("--load_weights_folder",
@@ -111,7 +138,26 @@ class MonodepthOptions:
                                  help="weight for ssim loss",
                                  default=0.75)
         
-        
+        # TRAINING options
+        self.parser.add_argument("--debug",
+                                 type=bool,
+                                 default=False)
+        self.parser.add_argument("--device",
+                                 type=str,
+                                 default='cuda:0'
+                                 )
+
+        self.parser.add_argument("--split",
+                                 type=str,
+                                 help="which training split to use",
+                                 choices=["eigen_zhou", "eigen_full", "odom", "benchmark"],
+                                 default="eigen_zhou")
+        self.parser.add_argument("--num_layers",
+                                 type=int,
+                                 help="number of resnet layers",
+                                 default=18,
+                                 choices=[18, 34, 50, 101, 152])
+
         
 
         # optical flow branch ----------------
@@ -146,30 +192,7 @@ class MonodepthOptions:
                                  type=str2bool,
                                  help="predict depth or not",
                                  default='False')
-        # TRAINING options
-        self.parser.add_argument("--debug",
-                                 type=bool,
-                                 default=False)
-        self.parser.add_argument("--device",
-                                 type=str,
-                                 default='cuda:0'
-                                 )
-
-        self.parser.add_argument("--split",
-                                 type=str,
-                                 help="which training split to use",
-                                 choices=["eigen_zhou", "eigen_full", "odom", "benchmark"],
-                                 default="eigen_zhou")
-        self.parser.add_argument("--num_layers",
-                                 type=int,
-                                 help="number of resnet layers",
-                                 default=18,
-                                 choices=[18, 34, 50, 101, 152])
-        self.parser.add_argument("--dataset",
-                                 type=str,
-                                 help="dataset to train on",
-                                 default="kitti",
-                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test"])
+        
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
                                  action="store_true")
@@ -319,3 +342,12 @@ class MonodepthOptions:
     def parse(self):
         self.options = self.parser.parse_args()
         return self.options
+
+
+'''
+--data_path
+--data_path_FlyingChairs
+--data_path_FlyingThings3D
+--data_path_MpiSintel
+--data_path_KITTI_mv15
+'''

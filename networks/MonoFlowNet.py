@@ -103,29 +103,42 @@ class MonoFlowNet(nn.Module):
 
     def predict_flow(self, inputs, features):
         outputs = {}
+        if len(self.opt.frame_ids) == 3:
+            idx_pair_list = [(-1, 0), (0, 1)]
+        elif len(self.opt.frame_ids) == 2:
+            idx_pair_list = [(-1, 0)]
+        else:
+            raise NotImplementedError
+        
         if self.opt.optical_flow in ['flownet', ]:
-            for (img1_idx, img2_idx) in [(-1, 0), (0, 1)]:
+            for (img1_idx, img2_idx) in idx_pair_list:
                 out_1 = self.cal_fwd_flownet(features[img1_idx], features[img2_idx])
                 out_2 = self.cal_fwd_flownet(features[img2_idx], features[img1_idx])
-                for scale in initial_opt.scales:
+                for scale in self.opt.scales:
                     outputs[('flow', img1_idx, img2_idx, scale)] = out_1['level'+str(scale)]
                     outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
             return outputs
 
         elif self.opt.optical_flow in ["upflow", ]:
-            flow_prev_curr = self.cal_fwd_upflow(features[-1], features[0], inputs[("color_aug", -1, 0)], inputs[("color_aug", 0, 0)])
-            flow_curr_prev = self.cal_fwd_upflow(features[0], features[-1], inputs[("color_aug", 0, 0)], inputs[("color_aug", -1, 0)])
-            flow_curr_next = self.cal_fwd_upflow(features[0], features[1], inputs[("color_aug", 0, 0)], inputs[("color_aug", 1, 0)])
-            flow_next_curr = self.cal_fwd_upflow(features[1], features[0], inputs[("color_aug", 1, 0)], inputs[("color_aug", 0, 0)])
-
-            loss_by_upflow = flow_prev_curr['smooth_loss'] + flow_prev_curr['photo_loss'] + \
-                             flow_prev_curr['census_loss'] + flow_prev_curr['msd_loss']
-            return flow_prev_curr['flow_f_out'], flow_curr_next['flow_f_out'], \
-                   flow_curr_prev['flow_f_out'], flow_next_curr['flow_f_out'], loss_by_upflow
+            # todo: DEBUG this part 
+            for scale in self.opt.scales:
+                for (img1_idx, img2_idx) in idx_pair_list:
+                    out_fwd = self.cal_fwd_upflow(
+                        features[img1_idx], features[img2_idx], inputs[("color_aug", img1_idx, scale)], 
+                        inputs[("color_aug", img2_idx, scale)])
+                    out_bwd = self.cal_fwd_upflow(
+                        features[img2_idx], features[img1_idx], inputs[("color_aug", img2_idx, scale)],
+                        inputs[("color_aug", img1_idx, scale)])
+                    outputs[('flow', img1_idx, img2_idx, scale)] = out_fwd['flow', scale]
+                    outputs[('flow', img2_idx, img1_idx, scale)] = out_bwd['flow', scale]
+                    
+            loss_by_upflow += out_fwd['smooth_loss'] + out_fwd['photo_loss'] + out_fwd['census_loss'] + out_fwd['msd_loss'] + \
+                                 out_bwd['smooth_loss'] + out_bwd['photo_loss'] + out_bwd['census_loss'] + out_bwd['msd_loss']
+            return outputs
 
 
         elif self.opt.optical_flow in ["pwc", ]:
-            for (img1_idx, img2_idx) in [(-1, 0), (0, 1)]:
+            for (img1_idx, img2_idx) in idx_pair_list:
                 out_1 = self.cal_fwd_pwcnet(features[img1_idx], features[img2_idx])
                 out_2 = self.cal_fwd_pwcnet(features[img2_idx], features[img1_idx])
                 for scale in initial_opt.scales:

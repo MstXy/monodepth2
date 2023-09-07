@@ -6,7 +6,7 @@
 
 from __future__ import absolute_import, division, print_function
 
-import torch.utils.data as td
+import torch.utils.data
 import os
 import skimage.transform
 import numpy as np
@@ -16,7 +16,9 @@ from monodepth2.utils.kitti_utils import generate_depth_map
 from .mono_dataset import MonoDataset
 import numpy as np
 from PIL import Image
-
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+opt = options.parse()
 
 
 class KITTIDataset(MonoDataset):
@@ -139,10 +141,59 @@ class KITTIDepthDataset(KITTIDataset):
 
 
 
+class KITTI_MV_2015(torch.utils.data.Dataset):
+    def __init__(self, aug_params=None, split='trianing', root_path=opt.data_path_KITTI_mv15, frame_ids=[-1, 0, 1]):
+        self.root_path = root_path
+        self.frame_ids = frame_ids
+        self.file_names_list = self.get_filenames()
 
+    def get_color(self, folder, frame_index, side, do_flip):
+        color = self.loader(self.get_image_path(folder, frame_index, side))
 
-
-
+        if do_flip:
+            color = color.transpose(pil.FLIP_LEFT_RIGHT)
+        
+    
+    def get_filenames(self):
+        file_names_list = []
+        return file_names_list
+    
+    def get_image_path(self, folder, frame_index, side):
+        f_str = "{:010d}{}".format(frame_index, self.img_ext)
+        image_path = os.path.join(
+            self.data_path, folder, "image_0{}/data".format(self.side_map[side]), f_str)
+        return image_path
+    
+    
+    
+    def __len__(self):
+        return len(self.file_names_list)
+    
+    
+    
+    def __getitem__(self, index):
+        
+        
+        inputs = {}
+        for frame_id in self.frame_ids:
+            inputs[("color", frame_id, -1)] = self.get_color(folder, frame_index + frame_id, side, do_flip)
+        
+        
+        for k in list(inputs):
+            if "color" in k:
+                n, im, i = k
+                inputs[(n, im, -1)] = self.to_tensor(inputs[(n, im, -1)])
+                
+        
+        file_name = self.file_names_list[index]
+        img = Image.open(file_name)
+        img = np.array(img)
+        img = img.astype(np.float32)
+        img = img.transpose(2, 0, 1)
+        return img, file_name
+    
+     
+    
 
 
 

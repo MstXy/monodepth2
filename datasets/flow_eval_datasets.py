@@ -4,22 +4,28 @@ import numpy as np
 import torch
 import torch.utils.data as data
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 import os
 import math
 import random
 from glob import glob
 import os.path as osp
 
-import monodepth2.utils.utils
+import monodepth2.utils.utils as mono_utils
 from monodepth2.utils import frame_utils
+
 from monodepth2.utils.augmentor import FlowAugmentor, SparseFlowAugmentor
 from torchvision.transforms import Normalize
+from monodepth2.options import MonodepthOptions
+options = MonodepthOptions()
+opt = options.parse()
 
 class FlowDataset(data.Dataset):
     def __init__(self, aug_params=None, sparse=False):
         self.augmentor = None
         self.sparse = sparse
         self.norm_trans = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
+        self.to_tensor = transforms.ToTensor()
         if aug_params is not None:
             if sparse:
                 self.augmentor = SparseFlowAugmentor(**aug_params)
@@ -58,7 +64,7 @@ class FlowDataset(data.Dataset):
         if self.sparse:
             flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
         else:
-            flow = frame_utils.read_gen(self.flow_list[index])
+            flow = torch.from_numpy(frame_utils.read_gen(self.flow_list[index]))
 
         if self.occ_list is not None:
             occ = frame_utils.read_gen(self.occ_list[index])
@@ -78,30 +84,14 @@ class FlowDataset(data.Dataset):
             seg_inv = np.array(seg_inv).astype(np.uint8)
             seg_inv = torch.from_numpy(seg_inv // 255).bool()
 
-        img1 = frame_utils.read_gen(self.image_list[index][0])
-        img2 = frame_utils.read_gen(self.image_list[index][1])
-
-        flow = np.array(flow).astype(np.float32)
-        img1 = np.array(img1).astype(np.float32)
-        img2 = np.array(img2).astype(np.float32)
-
-        # grayscale images
-        if len(img1.shape) == 2:
-            img1 = np.tile(img1[...,None], (1, 1, 3))
-            img2 = np.tile(img2[...,None], (1, 1, 3))
-        else:
-            img1 = img1[..., :3]
-            img2 = img2[..., :3]
+        img1 = self.to_tensor(frame_utils.read_gen(self.image_list[index][0]))
+        img2 = self.to_tensor(frame_utils.read_gen(self.image_list[index][1]))
 
         if self.augmentor is not None:
             if self.sparse:
                 img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)
             else:
                 img1, img2, flow = self.augmentor(img1, img2, flow)
-
-        img1 = torch.from_numpy(img1).permute(2, 0, 1).float() / 255
-        img2 = torch.from_numpy(img2).permute(2, 0, 1).float() / 255
-        flow = torch.from_numpy(flow).permute(2, 0, 1).float()
 
         if valid is not None:
             valid = torch.from_numpy(valid)
@@ -113,7 +103,9 @@ class FlowDataset(data.Dataset):
         elif self.seg_list is not None and self.seg_inv_list is not None:
             return img1, img2, flow, valid.float(), seg_map, seg_inv
         else:
-            return img1, img2, flow, valid.float()#, self.extra_info[index]
+            # return img1, img2, flow, valid.float()#, self.extra_info[index]
+            # input[('color', idx, scale)]
+            return {('color', -1, 0): img1, ('color', 0, 0): img2, ('flow', -1, 0): flow, ('valid', -1, 0): valid}
 
     def __rmul__(self, v):
         self.flow_list = v * self.flow_list
@@ -164,19 +156,33 @@ class MpiSintel(FlowDataset):
 
 
 class FlyingChairs(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/home/zac/data/FlyingChairs_release/data'):
+    def __init__(self, root, aug_params=None, split='training'):
         super(FlyingChairs, self).__init__(aug_params)
 
-        images = sorted(glob(osp.join(root, '*.ppm')))
-        flows = sorted(glob(osp.join(root, '*.flo')))
+        images = sorted(glob(osp.join(root, 'data', '*.ppm')))
+        flows = sorted(glob(osp.join(root, 'data', '*.flo')))
         assert (len(images)//2 == len(flows))
 
-        split_list = np.loadtxt('/home/zac/data/FlyingChairs_release/FlyingChairs_train_val.txt', dtype=np.int32)
+        split_txt = os.path.join(root, 'FlyingChairs_train_val.txt')
+        if not os.path.exists(split_txt):
+            print("Creating FlyingChairs_train_val.txt...")
+            split_list = np.random.choice([1, 2], size=len(flows), p=[0.8, 0.2])
+            np.savetxt(split_txt, split_list, fmt='%d')
+        
+        split_list = np.loadtxt(split_txt, dtype=np.int32)
         for i in range(len(flows)):
             xid = split_list[i]
             if (split=='training' and xid==1) or (split=='validation' and xid==2):
-                self.flow_list += [ flows[i] ]
-                self.image_list += [ [images[2*i], images[2*i+1]] ]
+                self.flow_list += [ flows[i]]
+                self.image_list += [ [images[2*i], images[2*i+1]]]
+                
+                # vis
+                # tmp_img = frame_utils.read_gen(self.image_list[-1][0])
+                # tmp_flow = frame_utils.read_gen(self.flow_list[-1])
+                # tmp_img.show()
+                # totensor = transforms.ToTensor()
+                # mono_utils.stitching_and_show([totensor(tmp_img), totensor(tmp_flow)], show=True)
+                # breakpoint()
 
 
 class FlyingThings3D(FlowDataset):
@@ -228,9 +234,9 @@ class FlyingThings3D(FlowDataset):
                 self.flow_list = [self.flow_list[ind] for ind, sel in enumerate(valid_list) if sel]
       
 
-class KITTI(FlowDataset):
+class KITTI_2015_scene_flow(FlowDataset):
     def __init__(self, aug_params=None, split='training', root='/home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/data_scene_flow'):
-        super(KITTI, self).__init__(aug_params, sparse=True)
+        super(KITTI_2015_scene_flow, self).__init__(aug_params, sparse=True)
         if split == 'testing':
             self.is_test = True
 
@@ -286,7 +292,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
         sintel_final = MpiSintel(aug_params, split='training', dstype='final')        
 
         if TRAIN_DS == 'C+T+K+S+H':
-            kitti = KITTI({'crop_size': args.image_size, 'min_scale': -0.3, 'max_scale': 0.5, 'do_flip': True})
+            kitti = KITTI_2015_scene_flow({'crop_size': args.image_size, 'min_scale': -0.3, 'max_scale': 0.5, 'do_flip': True})
             hd1k = HD1K({'crop_size': args.image_size, 'min_scale': -0.5, 'max_scale': 0.2, 'do_flip': True})
             train_dataset = 100*sintel_clean + 100*sintel_final + 200*kitti + 5*hd1k + things
 
@@ -295,7 +301,7 @@ def fetch_dataloader(args, TRAIN_DS='C+T+K+S+H'):
 
     elif args.stage == 'kitti':
         aug_params = {'crop_size': args.image_size, 'min_scale': -0.2, 'max_scale': 0.4, 'do_flip': False}
-        train_dataset = KITTI(aug_params, split='training')
+        train_dataset = KITTI_2015_scene_flow(aug_params, split='training')
 
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size,
                                    pin_memory=True, shuffle=True, num_workers=8, drop_last=True)
