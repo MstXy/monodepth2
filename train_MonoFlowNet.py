@@ -515,8 +515,9 @@ def load_train_objs():
             opt.data_path, train_filenames, opt.height, opt.width,
             opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not opt.depth_branch and opt.optical_flow))
         
-    elif opt.train_dataset in ['kitti_mv2015']:
-        train_dataset = datasets.KITTI_MV_2015()
+    elif opt.train_dataset in ['kitti_mv15']:
+        opt.frame_ids=[-1, 0]
+        train_dataset = datasets.KITTI_MV_2015(mv_data_dir=opt.data_path_KITTI_mv15, frame_ids=opt.frame_ids)
     
     elif opt.train_dataset in ['FlyingChairs']:
         train_dataset = flow_eval_datasets.FlyingChairs(root=opt.data_path_FlyingChairs, aug_params=None, split='training')
@@ -524,17 +525,20 @@ def load_train_objs():
         # opt.width = 512
         opt.frame_ids=[-1, 0]
     
+    else:
+        raise NotImplementedError
+    
     # ====== 2.train dataset: kitti
-
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=opt.batch_size,
         num_workers=opt.num_workers,
         pin_memory=True,
         shuffle=True,
-        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
+        sampler=(torch.utils.data.distributed.DistributedSampler(train_dataset) if opt.ddp else None),
         drop_last=True
     )
+    
 
     # ====== 2.eval dataset: depth
 

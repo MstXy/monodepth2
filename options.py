@@ -19,6 +19,12 @@ class MonodepthOptions:
         self.parser = argparse.ArgumentParser(description="Monodepthv2 options")
 
         # PATHS
+        self.parser.add_argument("--train_dataset",
+                                 type=str,
+                                 help="dataset to train on",
+                                 default="kitti",
+                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test", "kitti_mv15", "FlyingChairs"])
+        
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
@@ -39,7 +45,7 @@ class MonodepthOptions:
         
         self.parser.add_argument("--data_path_KITTI_mv15",
                                     type=str, 
-                                    default="/home/wangshuo/LAB-Backup/Data/kitti/data_scene_flow_multiview")
+                                    default="/home/wangshuo/LAB-Backup/Data/kitti/")
     
         self.parser.add_argument("--log_dir",
                                  type=str,
@@ -51,11 +57,7 @@ class MonodepthOptions:
                                  help='flow valuation kitti dataset root dir',
                                  default='/mnt/km-nfs/ns100002-share/data_scene_flow')
         
-        self.parser.add_argument("--train_dataset",
-                                 type=str,
-                                 help="dataset to train on",
-                                 default="kitti",
-                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test", "FlyingChairs"])
+
         
         self.parser.add_argument("--val_dataset",
                                  type=str,

@@ -455,3 +455,19 @@ def create_outgoing_mask(flow):
     inside_y = (pos_y <= (height - 1)) & (pos_y >= 0.0)
     inside = inside_x & inside_y
     return inside.type(torch.FloatTensor).unsqueeze(1)
+
+
+import pickle
+class Tools():
+    class pickle_saver():
+
+        @classmethod
+        def save_pickle(cls, files, file_path):
+            with open(file_path, 'wb') as data:
+                pickle.dump(files, data)
+
+        @classmethod
+        def load_picke(cls, file_path):
+            with open(file_path, 'rb') as data:
+                data = pickle.load(data)
+            return data
