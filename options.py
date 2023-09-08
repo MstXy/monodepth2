@@ -63,6 +63,11 @@ class MonodepthOptions:
                                  default="kitti",
                                  choices=["kitti", "kitti_odom", "FlyingChairs"])
         
+        self.parser.add_argument("--freeze_Resnet",
+                                    type=str2bool,
+                                    help="freeze Resnet",
+                                    default='False')
+        
         # LOADING options
         self.parser.add_argument("--load_weights_folder",
                                  type=str,

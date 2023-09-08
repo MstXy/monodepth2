@@ -97,6 +97,7 @@ class SSIM(nn.Module):
 
         return torch.clamp((1 - SSIM_n / SSIM_d) / 2, 0, 1)
 
+
 class MonoFlowLoss():
     def __init__(self):
         self.opt = opt
@@ -567,8 +568,6 @@ def prepare_dataloader(dataset):
 
 
 
-
-
 class DDP_Trainer():
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
@@ -622,14 +621,29 @@ class DDP_Trainer():
             self.model = MonoFlowNet(opt)
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
-
-        self.model_optimizer = optim.Adam(self.model.parameters(), self.opt.learning_rate)
+        else:
+            raise NotImplementedError
+        
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
             self.ddp_model = DDP(self.model.to(self.gpu_id), device_ids=[self.gpu_id], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
+
+        if opt.freeze_Resnet:
+            paras = []
+            for name, param in self.ddp_model.named_parameters():
+                if 'ResEncoder' in name:
+                    param.requires_grad = False
+                elif 'FlowDecoder' in name:
+                    paras.append(param)
+                    param.requires_grad = True
+                else:
+                    raise NotImplementedError
+            self.model_optimizer = optim.Adam(paras, self.opt.learning_rate)
+        else:
+            self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
 
         # self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, self.opt.scheduler_step_size, 0.4)
         self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.model_optimizer,
@@ -789,12 +803,16 @@ class DDP_Trainer():
         if self.opt.optical_flow:
             self.ddp_model.eval()
             """ Peform validation using the KITTI-2015 (train) split """
-            val_dataset = flow_eval_datasets.KITTI(split='training', root=self.opt.val_data_root)
+            val_dataset = flow_eval_datasets.KITTI_2015_scene_flow(split='training', root=self.opt.val_data_root)
             out_list, epe_list = [], []
             save_path_dir = os.path.join(self.log_path, 'evaluate_flow_kitti')
             os.makedirs(save_path_dir, exist_ok=True)
             for val_id in range(len(val_dataset)):
-                image1_ori, image2_ori, flow_gt, valid_gt = val_dataset[val_id]
+                input_dict = val_dataset[val_id]
+                # {('color', -1, 0): img1, ('color', 0, 0): img2, ('flow', -1, 0): flow, ('valid', -1, 0): valid}
+                image1_ori, image2_ori, flow_gt, valid_gt = input_dict[('color', -1, 0)], input_dict[('color', 0, 0)], \
+                                                            input_dict[('flow', -1, 0)], input_dict[('valid', -1, 0)]   
+                
                 image1_ori = image1_ori[None].to(self.gpu_id)
                 image2_ori = image2_ori[None].to(self.gpu_id)
                 padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
@@ -878,6 +896,9 @@ class DDP_Trainer():
         for k in list(inputs):
             if "color" in k:
                 n, im, _ = k
+                if opt.height != inputs[k].shape[2] or opt.width != inputs[k].shape[3]:
+                    inputs[k] = self.resize[0](inputs[k])
+                    
                 for i in range(1, self.num_scales):
                     inputs[(n, im, i)] =self.resize[i](inputs[(n, im, i - 1)])
 
@@ -945,7 +966,6 @@ def ddp_setup(rank, world_size):
     torch.cuda.set_device(rank)
 
 
-
 def main(rank: int, world_size: int):
     ddp_setup(rank, world_size)
     dataset = load_train_objs()
@@ -953,75 +973,6 @@ def main(rank: int, world_size: int):
     trainer = DDP_Trainer(gpu_id=rank, train_loader=train_loader)
     trainer.train()
     destroy_process_group()
-
-
-#############################         test          ###############################
-def model_test():
-    opt.depth_branch = True
-    opt.optical_flow = 'flownet'
-    opt.batch_size = 10
-
-    model = MonoFlowNet().to(opt.device)
-    inputs = {}
-    for i in opt.frame_ids:
-        inputs[("color_aug", i, 0)] = torch.randn(opt.batch_size, 3, 192, 640).to(opt.device)
-
-    ## params and flops evaluation
-    from thop import profile
-    flops, params = profile(model, inputs=(inputs,))
-    print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
-    t1 = time.time()
-    outputs = model(inputs)
-    print('time spent:', time.time() - t1)
-    for k, v in outputs.items():
-        print(k, v.shape)
-
-
-def use_single_gpu(gpu, tmpdataset):
-    t1 = time.time()
-    mono_loss = MonoFlowLoss()
-    model = MonoFlowNet().to(gpu)
-    model_optimizer = optim.Adam(model.parameters(), 0.001)
-    tmp_loader = DataLoader(
-        tmpdataset, opt.batch_size, True,
-        num_workers=opt.num_workers, pin_memory=True, drop_last=True)
-    t2 = 0
-
-    def preprocess(self, inputs):
-        """Resize colour images to the required scales and augment if required
-                We create the color_aug object in advance and apply the same augmentation to all
-                images in this item. This ensures that all images input to the pose network receive the
-                same augmentation.
-                """
-        color_aug = transforms.ColorJitter(
-            self.brightness, self.contrast, self.saturation, self.hue)
-        for k in list(inputs):
-            frame = inputs[k]
-            if "color" in k:
-                n, im, _ = k
-                for i in range(1, self.num_scales):
-                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
-
-        for k in list(inputs):
-            f = inputs[k]
-            if "color" in k:
-                n, im, i = k
-                # inputs[(n, im, i)] = (self.to_tensor(f))
-                inputs[(n + "_aug", im, i)] = color_aug(f)
-
-
-    for idx, inputs in enumerate(tqdm(tmp_loader)):
-        for key, ipt in inputs.items():
-            inputs[key] = ipt.to(gpu)
-        preprocess(inputs)
-        outputs = model(inputs)
-        losses = mono_loss.compute_losses(inputs, outputs)
-        losses['loss'].backward()
-        if idx % 30 == 0:
-            print('using ddp, idx={}, loss={}, time spent={}'.format(idx * opt.batch_size, losses["loss"].cpu().data, time.time()-t2))
-            t2 = time.time()
-        model_optimizer.step()
-    print(time.time() - t1)
 
 
 if __name__ == "__main__":

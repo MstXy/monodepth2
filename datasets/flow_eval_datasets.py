@@ -26,6 +26,7 @@ class FlowDataset(data.Dataset):
         self.sparse = sparse
         self.norm_trans = Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
         self.to_tensor = transforms.ToTensor()
+        self.resize_0 = transforms.Resize((opt.height, opt.width))
         if aug_params is not None:
             if sparse:
                 self.augmentor = SparseFlowAugmentor(**aug_params)
@@ -63,6 +64,7 @@ class FlowDataset(data.Dataset):
         valid = None
         if self.sparse:
             flow, valid = frame_utils.readFlowKITTI(self.flow_list[index])
+            flow = torch.from_numpy(flow.transpose([2, 0, 1]))
         else:
             flow = torch.from_numpy(frame_utils.read_gen(self.flow_list[index]))
 
@@ -86,7 +88,7 @@ class FlowDataset(data.Dataset):
 
         img1 = self.to_tensor(frame_utils.read_gen(self.image_list[index][0]))
         img2 = self.to_tensor(frame_utils.read_gen(self.image_list[index][1]))
-
+        
         if self.augmentor is not None:
             if self.sparse:
                 img1, img2, flow, valid = self.augmentor(img1, img2, flow, valid)

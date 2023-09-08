@@ -283,12 +283,47 @@ class MonoFlowNet(nn.Module):
         elif self.opt.optical_flow in ["pwc", ]:
             return None, networks.PWCDecoder()
 
+def model_test():
+    import time
+    initial_opt.depth_branch = True
+    initial_opt.optical_flow = 'flownet'
+    initial_opt.batch_size = 10
 
+    model = MonoFlowNet().to(initial_opt.device)
+    inputs = {}
+    for i in initial_opt.frame_ids:
+        inputs[("color_aug", i, 0)] = torch.randn(initial_opt.batch_size, 3, 192, 640).to(initial_opt.device)
 
+    ## params and flops evaluation
+    from thop import profile
+    flops, params = profile(model, inputs=(inputs,))
+    print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
+    t1 = time.time()
+    outputs = model(inputs)
+    print('time spent:', time.time() - t1)
+    for k, v in outputs.items():
+        print(k, v.shape)
 
-
-
-
+if __name__ =="__main__":
+    initial_opt.optical_flow='pwc'
+    net = MonoFlowNet()
+    paras = []
+    for name, param in net.named_parameters():
+        if 'ResEncoder' in name:
+            print('not update', name)
+            param.requires_grad = False
+            
+        elif 'FlowDecoder' in name:
+            print('update only', name)
+            paras.append(param)
+            param.requires_grad = True
+        else:
+            raise NotImplementedError
+            
+    net.cuda()
+    for name, p in net.named_parameters():
+        print(name, p.requires_grad)
+    # print(net)
 
 
 
