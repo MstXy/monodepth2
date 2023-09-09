@@ -152,8 +152,8 @@ class KITTI_MV_2015(torch.utils.data.Dataset):
         self.is_train = True
         self.frame_ids = frame_ids
         self.mv_data_dir = mv_data_dir
-        self.resize_0 = transforms.Resize((height, witdth), interpolation=Image.ANTIALIAS)
         self.filenames = self.mv15_data_get_file_names()[mv_type]
+        self.resize_0 = transforms.Resize((height, witdth), interpolation=Image.ANTIALIAS)
     
     def __len__(self):
         return len(self.filenames) - 1
@@ -171,16 +171,16 @@ class KITTI_MV_2015(torch.utils.data.Dataset):
                 n, im, i = k
                 inputs[(n, im, 0)] = self.to_tensor(self.resize_0(inputs[(n, im, -1)]))
                 del inputs[("color", im, -1)]
-                
+
         return inputs
 
     def get_color(self, index,  frame_id, do_flip=False):
         color = self.pil_loader(self.filenames[index][frame_id])
-            
         if do_flip:
             color = color.transpose(pil.FLIP_LEFT_RIGHT)
-
         return color
+    
+    
     def mv15_data_get_file_names(self,):
         file_names_save_path = os.path.join(self.mv_data_dir, 'kitti_flow_2015_multiview_file_names.pkl')
         if os.path.isfile(file_names_save_path):

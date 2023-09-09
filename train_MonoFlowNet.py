@@ -257,10 +257,11 @@ class MonoFlowLoss():
                     tmp_smooth_o2_loss += flow_loss["smo_loss_o2"]
                     tmp_photo_l1_loss += flow_loss["photo_loss_l1"]
                     tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
-                losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w if scale in [2, 3] else 0 
-                losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w if scale in [2, 3] else 0 
-                losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w * math.exp(-scale)
-                losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w * math.exp(-scale)
+                
+                losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w[scale]
+                losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w[scale]
+                losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w[scale]
+                losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w[scale]
                 losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
                                         losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
 
@@ -738,9 +739,9 @@ class DDP_Trainer():
                     img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1], j)
                     # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
                     img1_warped_img1_diff = mono_utils.log_vis_2(inputs, outputs, idx_pair[0], idx_pair[1], j)
-                    writer.add_image('1.Img2_||_2.OccImg1->Img2_||_3.FlowImg1->Img2_||_4.Img1._||_IdxPair{},{}/{}'.
+                    writer.add_image('1.Img2__2.OccImg1->Img2__3.FlowImg1->Img2__4.Img1.__IdxPair{},{}/{}'.
                                      format(idx_pair[0], idx_pair[1], j),img1_img2_flow, self.step)
-                    writer.add_image('1.Diff_||_2.DiffMasked_||_3.WarpedImg1_||_4.SourceImg1_||_5.FlowImg1->Img2_||_IdxPair{},{}/{}'.
+                    writer.add_image('1.Diff__2.DiffMasked__3.WarpedImg1__4.SourceImg1__5.FlowImg1->Img2__IdxPair{},{}/{}'.
                                      format(idx_pair[0], idx_pair[1], j), img1_warped_img1_diff, self.step)
 
             if self.opt.depth_branch:
@@ -913,13 +914,13 @@ class DDP_Trainer():
                 # inputs[(n, im, i)] = (self.to_tensor(f))
                 inputs[(n + "_aug", im, i)] = f
         
-        # visualize
-        # for j in range(inputs['color_aug', -1, 0].size()[0]):
+        # ## visualize
+        # for j in range(self.num_scales):
         #     mono_utils.stitching_and_show(img_list=[
-        #         inputs['color_aug', -1, 0][j],
-        #         inputs['color_aug', 0, 0][j],
-        #         inputs['color_aug', 1, 0][j],
+        #         inputs['color_aug', -1, j][0],
+        #         inputs['color_aug', 0, j][0],
         #     ], ver=True, show=True)
+        # breakpoint()
 
     def _run_batch(self, inputs, batch_idx):
         self.model_optimizer.zero_grad()
@@ -957,7 +958,6 @@ class DDP_Trainer():
                 self.save_ddp_model()
                 self.eval_depth_flow()
 
-
 def ddp_setup(rank, world_size):
     """
     Args:
@@ -968,7 +968,6 @@ def ddp_setup(rank, world_size):
     os.environ["MASTER_PORT"] = "29500"
     dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
     torch.cuda.set_device(rank)
-
 
 def main(rank: int, world_size: int):
     ddp_setup(rank, world_size)

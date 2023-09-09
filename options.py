@@ -124,26 +124,34 @@ class MonodepthOptions:
                                  type=int,
                                  help="step size of the scheduler",
                                  default=15)
+        
+        
         # LOSS WEIGHTS
         self.parser.add_argument("--loss_smo1_w",
+                                 nargs="+",
                                  type=float,
-                                 help="smoothness weight order 1",
-                                 default=10.0)
+                                 help="scales used in the loss",
+                                 default=[0, 0, 0, 0])
         
         self.parser.add_argument("--loss_smo2_w",
-                                    type=float,
-                                    help="smoothness weight order2",
-                                    default=10.0)
+                                 nargs="+",
+                                 type=float,
+                                 help="scales used in the loss",
+                                 default=[10, 10, 20, 30])
         
         self.parser.add_argument("--loss_l1_w",
+                                 nargs="+",
                                  type=float,
-                                 help="weight for l1 loss",
-                                 default=0.25)
+                                 help="scales used in the loss",
+                                 default=[0.15, 0.15, 0.15, 0.15])
         
         self.parser.add_argument("--loss_ssim_w",
+                                 nargs="+",
                                  type=float,
-                                 help="weight for ssim loss",
-                                 default=0.75)
+                                 help="scales used in the loss",
+                                 default=[0.85, 0.85, 0.85, 0.85])
+        
+        
         
         # TRAINING options
         self.parser.add_argument("--debug",
