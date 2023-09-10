@@ -214,14 +214,16 @@ def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.8, occ_alpha_2=0.05, 
         '''sqrt(flow[0]^2 + flow[1]^2)
         '''
         temp = torch.sum(x ** 2, dim=1, keepdim=True)
-        temp = torch.pow(temp, 0.5)
+        # temp = torch.pow(temp, 0.5)
         return temp
-    mag_sq = sum_func(flow_fwd) + sum_func(flow_bwd)
+
     flow_fwd_warped = torch_warp(flow_bwd, flow_fwd)  # (img, flow)
     flow_bwd_warped = torch_warp(flow_fwd, flow_bwd)
+    mag_sq = (sum_func(flow_fwd) + sum_func(flow_bwd) + sum_func(flow_fwd_warped) + sum_func(flow_fwd_warped))/2
+    
     flow_fwd_diff = flow_fwd + flow_fwd_warped
     flow_bwd_diff = flow_bwd + flow_bwd_warped
-    occ_thresh = occ_alpha_1 * mag_sq + occ_alpha_2 / scale
+    occ_thresh = 0.01 * mag_sq / 2 + 0.5
     occ_fw = sum_func(flow_fwd_diff) < occ_thresh  # 0 means the occlusion region where the photo loss we should ignore
     occ_bw = sum_func(flow_bwd_diff) < occ_thresh
     if not border_mask:
@@ -234,6 +236,37 @@ def cal_occ_map(flow_fwd, flow_bwd, scale=1, occ_alpha_1=0.8, occ_alpha_2=0.05, 
     bw = mask_bw * occ_bw
 
     return fw.float(), bw.float()
+
+
+def create_outgoing_mask(flow):
+    device = flow.device
+    num_batch, channel, height, width = flow.shape
+
+    grid_x = torch.arange(width, device=device).view(1, 1, width)
+    grid_x = grid_x.repeat(num_batch, height, 1)
+    grid_y = torch.arange(height, device=device).view(1, height, 1)
+    grid_y = grid_y.repeat(num_batch, 1, width)
+
+    flow_u, flow_v = torch.unbind(flow, 1)
+    pos_x = grid_x.type(torch.FloatTensor).to(device) + flow_u
+    pos_y = grid_y.type(torch.FloatTensor).to(device) + flow_v
+    inside_x = (pos_x <= (width - 1)) & (pos_x >= 0.0)
+    inside_y = (pos_y <= (height - 1)) & (pos_y >= 0.0)
+    inside = inside_x & inside_y
+    return inside.type(torch.FloatTensor).unsqueeze(1).to(device)
+
+
+def get_occu_mask_bidirection(flow12, flow21, scale=0.01, bias=0.5):
+    flow21_warped = torch_warp(flow21, flow12)
+    flow12_diff = flow12 + flow21_warped
+    mag = (flow12 * flow12).sum(1, keepdim=True) + \
+          (flow21_warped * flow21_warped).sum(1, keepdim=True)
+    occ_thresh = scale * mag + bias
+    occ = (flow12_diff * flow12_diff).sum(1, keepdim=True) > occ_thresh
+    return occ.float()
+
+
+
 
 ############################################
 ####           img, flow, vis utils      ###
@@ -440,21 +473,6 @@ def length_sq(x):
     return torch.sum(x**2, 1, keepdim=True)
 
 
-def create_outgoing_mask(flow):
-    num_batch, channel, height, width = flow.shape
-
-    grid_x = torch.arange(width).view(1, 1, width)
-    grid_x = grid_x.repeat(num_batch, height, 1)
-    grid_y = torch.arange(height).view(1, height, 1)
-    grid_y = grid_y.repeat(num_batch, 1, width)
-
-    flow_u, flow_v = torch.unbind(flow, 1)
-    pos_x = grid_x.type(torch.FloatTensor) + flow_u.data.cpu()
-    pos_y = grid_y.type(torch.FloatTensor) + flow_v.data.cpu()
-    inside_x = (pos_x <= (width - 1)) & (pos_x >= 0.0)
-    inside_y = (pos_y <= (height - 1)) & (pos_y >= 0.0)
-    inside = inside_x & inside_y
-    return inside.type(torch.FloatTensor).unsqueeze(1)
 
 
 import pickle

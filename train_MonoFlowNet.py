@@ -38,6 +38,7 @@ from monodepth2.layers import *
 
 from monodepth2.networks.MonoFlowNet import MonoFlowNet
 from monodepth2.networks.UnFlowNet import UnFlowNet
+from monodepth2.networks.ARFlow_models.pwclite import PWCLite
 from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
@@ -49,6 +50,8 @@ cmap = plt.get_cmap('viridis')
 import monodepth2.datasets.flow_eval_datasets as flow_eval_datasets
 from monodepth2.utils import frame_utils
 from monodepth2.utils.utils import InputPadder, forward_interpolate
+
+from monodepth2.ARFlow_losses.flow_loss import unFlowLoss
 
 
 IF_DEBUG = False
@@ -189,7 +192,7 @@ class MonoFlowLoss():
 
         # ===== occ_1_2, occ_2_1:
         if opt.flow_occ_check:
-            occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1)
+            occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1, border_mask=False)
             if opt.stop_occ_gradient:
                 occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
@@ -455,7 +458,7 @@ class MonoFlowLoss():
         result = ssim_n / ssim_d
         return torch.clamp((1 - result) / 2, 0, 1), average_pooled_weight
 
-    def edge_aware_smoothness_order2(self, img, pred):
+    def edge_aware_smoothness_order2(self, img, pred, alpha=10):
         def gradient_x(img, stride=1):
             gx = img[:, :, :-stride, :] - img[:, :, stride:, :]
             return gx
@@ -470,11 +473,11 @@ class MonoFlowLoss():
         pred_gradients_yy = gradient_y(pred_gradients_y)
         image_gradients_x = gradient_x(img, stride=2)
         image_gradients_y = gradient_y(img, stride=2)
-        weights_x = torch.exp(-torch.mean(torch.abs(image_gradients_x), 1, keepdim=True))
-        weights_y = torch.exp(-torch.mean(torch.abs(image_gradients_y), 1, keepdim=True))
+        weights_x = torch.exp(-torch.mean(torch.abs(image_gradients_x), 1, keepdim=True) * alpha)
+        weights_y = torch.exp(-torch.mean(torch.abs(image_gradients_y), 1, keepdim=True) * alpha)
         smoothness_x = torch.abs(pred_gradients_xx) * weights_x
         smoothness_y = torch.abs(pred_gradients_yy) * weights_y
-        return torch.mean(smoothness_x) + torch.mean(smoothness_y)
+        return torch.mean(smoothness_x) / 2  + torch.mean(smoothness_y) / 2 
 
     def edge_aware_smoothness_order1(self, img, pred):
         def gradient_x(img):
@@ -500,6 +503,10 @@ class MonoFlowLoss():
         ssim_sum = self.ssim(img1_warped, img1)
         ssim_loss = torch.sum(ssim_sum * occ_1_2) / (torch.sum(ssim_sum) + 1e-6)
         return alpha * ssim_loss + (1-alpha) * l1_loss
+
+
+
+
 
 
 def load_train_objs():
@@ -622,10 +629,30 @@ class DDP_Trainer():
 
 
         #################### model, optim, loss, loding and saving ####################
+        from easydict import EasyDict 
+        with open('/home/liu/data16t/Projects/optical_flow/ARFlow/configs/kitti_raw.json') as f:
+            cfg = EasyDict(json.load(f))
+            
+            
+        self.arflow_loss = unFlowLoss(cfg=cfg)
+        class Dict2Class(object):
+            def __init__(self, my_dict):
+                for key in my_dict:
+                    setattr(self, key, my_dict[key])
+        
+        
         if self.opt.model_name == "MonoFlowNet":
             self.model = MonoFlowNet(opt)
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
+        elif self.opt.model_name == "ARFlow":
+
+            cfg = {"n_frames": 2,
+           "reduce_dense": True,
+           "type": "pwclite",
+           "upsample": True}
+            cfg = Dict2Class(cfg)
+            self.model = PWCLite(cfg).to('cuda:' + str(self.gpu_id))
         else:
             raise NotImplementedError
         
@@ -636,10 +663,17 @@ class DDP_Trainer():
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
 
+
+
+        print(self.ddp_model)
+
+
+        
         if opt.freeze_Resnet:
             paras = []
             for name, param in self.ddp_model.named_parameters():
                 if 'ResEncoder' in name:
+
                     param.requires_grad = False
                 elif 'FlowDecoder' in name:
                     paras.append(param)
@@ -928,6 +962,17 @@ class DDP_Trainer():
         self.preprocess(inputs)
         outputs = self.ddp_model(inputs)
         losses = self.mono_loss.compute_losses(inputs, outputs)
+        
+        # losses = {}
+        # loss, l_ph, l_sm, flow_mean, occ_mask = self.loss_func(flows, img_pair)
+        # losses['loss'] = loss
+        # losses['smo_loss_o1'] = l_sm[0]
+        # losses['smo_loss_o2'] = l_sm[1]
+        # losses['photo_loss_l1'] = l_ph[0]
+        # losses['photo_loss_ssim'] = l_ph[1]
+        
+        
+        
         losses['loss'].backward()
         self.model_optimizer.step()
 
@@ -942,6 +987,8 @@ class DDP_Trainer():
 
     def _run_epoch(self):
         for batch_idx, inputs in enumerate(self.train_loader):
+            if batch_idx > 1000:
+                break
             for key, ipt in inputs.items():
                 inputs[key] = ipt.to(self.gpu_id)
             self._run_batch(inputs=inputs, batch_idx=batch_idx)
