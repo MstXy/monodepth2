@@ -974,8 +974,10 @@ class DDP_Trainer():
         self.model_optimizer.zero_grad()
         start_batch_time = time.time()
         self.preprocess(inputs)
-        # outputs = self.ddp_model(inputs)
-        outputs = self.calculate_pwc_outdict(inputs)
+        if self.opt.model_name == "PWC_from_img":
+            outputs = self.calculate_pwc_outdict(inputs)
+        else:
+            outputs = self.ddp_model(inputs)
 
         
         
