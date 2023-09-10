@@ -629,12 +629,12 @@ class DDP_Trainer():
 
 
         #################### model, optim, loss, loding and saving ####################
-        from easydict import EasyDict 
-        with open('/home/liu/data16t/Projects/optical_flow/ARFlow/configs/kitti_raw.json') as f:
-            cfg = EasyDict(json.load(f))
-            
-            
-        self.arflow_loss = unFlowLoss(cfg=cfg)
+        # from easydict import EasyDict 
+        # with open('/home/liu/data16t/Projects/optical_flow/ARFlow/configs/kitti_raw.json') as f:
+        #     cfg = EasyDict(json.load(f))
+        # self.arflow_loss = unFlowLoss(cfg=cfg)
+        
+        
         class Dict2Class(object):
             def __init__(self, my_dict):
                 for key in my_dict:
@@ -662,13 +662,6 @@ class DDP_Trainer():
             self.ddp_model = DDP(self.model.to(self.gpu_id), device_ids=[self.gpu_id], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
-
-
-
-        print(self.ddp_model)
-
-
-        
         if opt.freeze_Resnet:
             paras = []
             for name, param in self.ddp_model.named_parameters():
@@ -977,7 +970,7 @@ class DDP_Trainer():
         self.model_optimizer.step()
 
         # ===== log
-        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000 and not self.opt.debug and self.is_master_node
+        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 20000 and not self.opt.debug and self.is_master_node
         late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
         if early_phase or late_phase:
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
@@ -987,7 +980,7 @@ class DDP_Trainer():
 
     def _run_epoch(self):
         for batch_idx, inputs in enumerate(self.train_loader):
-            if batch_idx > 1000:
+            if batch_idx > 1500:
                 break
             for key, ipt in inputs.items():
                 inputs[key] = ipt.to(self.gpu_id)
