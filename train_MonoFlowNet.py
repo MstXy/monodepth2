@@ -39,6 +39,7 @@ from monodepth2.layers import *
 from monodepth2.networks.MonoFlowNet import MonoFlowNet
 from monodepth2.networks.UnFlowNet import UnFlowNet
 from monodepth2.networks.ARFlow_models.pwclite import PWCLite
+from monodepth2.networks.pwc_decoder_ori import PWCDecoder_from_img
 from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
@@ -653,6 +654,8 @@ class DDP_Trainer():
            "upsample": True}
             cfg = Dict2Class(cfg)
             self.model = PWCLite(cfg).to('cuda:' + str(self.gpu_id))
+        elif self.opt.model_name == "PWC_from_img":
+            self.model = PWCDecoder_from_img()
         else:
             raise NotImplementedError
         
@@ -949,11 +952,33 @@ class DDP_Trainer():
         #     ], ver=True, show=True)
         # breakpoint()
 
+    def calculate_pwc_outdict(self, inputs):
+        outputs = {}
+        if len(self.opt.frame_ids) == 3:
+            idx_pair_list = [(-1, 0), (0, 1)]
+        elif len(self.opt.frame_ids) == 2:
+            idx_pair_list = [(-1, 0)]
+        else:
+            raise NotImplementedError
+        
+        for (img1_idx, img2_idx) in idx_pair_list:
+            out_1 = self.ddp_model(inputs['color_aug', img1_idx, 0], inputs['color_aug', img2_idx, 0])
+            out_2 = self.ddp_model(inputs['color_aug', img2_idx, 0], inputs['color_aug', img1_idx, 0])
+            for scale in self.opt.scales:
+                outputs[('flow', img1_idx, img2_idx, scale)] = out_1['level'+str(scale)]
+                outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
+                
+        return outputs
+    
     def _run_batch(self, inputs, batch_idx):
         self.model_optimizer.zero_grad()
         start_batch_time = time.time()
         self.preprocess(inputs)
-        outputs = self.ddp_model(inputs)
+        # outputs = self.ddp_model(inputs)
+        outputs = self.calculate_pwc_outdict(inputs)
+
+        
+        
         losses = self.mono_loss.compute_losses(inputs, outputs)
         
         # losses = {}
