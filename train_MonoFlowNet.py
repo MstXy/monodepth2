@@ -626,7 +626,8 @@ class DDP_Trainer():
             s = 2 ** i
             self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
                                                # interpolation=Image.ANTIALIAS)
-        self.norm_trans = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=False)
+                                               
+        self.norm_trans = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True)
 
 
         #################### model, optim, loss, loding and saving ####################
@@ -849,6 +850,10 @@ class DDP_Trainer():
                 
                 image1_ori = image1_ori[None].to(self.gpu_id)
                 image2_ori = image2_ori[None].to(self.gpu_id)
+                if opt.norm_trans:
+                    image1_ori = self.norm_trans(image1_ori)
+                    image2_ori = self.norm_trans(image2_ori)
+                
                 padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
                 image1, image2 = padder.pad(image1_ori, image2_ori)
                 with torch.no_grad():
@@ -936,6 +941,12 @@ class DDP_Trainer():
         for k in list(inputs):
             if "color" in k:
                 n, im, _ = k
+                if opt.norm_trans:
+                    inputs[k] = self.norm_trans(inputs[k])
+                    # mono_utils.stitching_and_show([inputs[k][0]], ver=True, show=True)
+                    # breakpoint()
+                    # print('after norm std={}, after norm mean={}'.format(torch.std(inputs[k], dim=(0,2,3)), torch.mean(inputs[k], dim=(0,2,3))))
+                
                 if opt.height != inputs[k].shape[2] or opt.width != inputs[k].shape[3]:
                     inputs[k] = self.resize[0](inputs[k])
                     
@@ -1002,7 +1013,7 @@ class DDP_Trainer():
         self.model_optimizer.step()
 
         # ===== log
-        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 20000 and not self.opt.debug and self.is_master_node
+        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
         late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
         if early_phase or late_phase:
             self.log_time(batch_idx, time.time() - start_batch_time, losses)
@@ -1012,8 +1023,8 @@ class DDP_Trainer():
 
     def _run_epoch(self):
         for batch_idx, inputs in enumerate(self.train_loader):
-            if batch_idx > 1500:
-                break
+            # if batch_idx > 1500:
+            #     break
             for key, ipt in inputs.items():
                 inputs[key] = ipt.to(self.gpu_id)
             self._run_batch(inputs=inputs, batch_idx=batch_idx)

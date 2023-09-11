@@ -16,6 +16,8 @@ import torch.nn.functional as F
 import os
 # os.environ['PYTHON_EGG_CACHE'] = 'tmp/' # a writable directory
 from .correlation import corr_pwc as correlation
+
+from monodepth2.networks.ARFlow_models.correlation_native import Correlation as arflow_corr
 import numpy as np
 
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):   
@@ -135,7 +137,11 @@ class PWCDecoder_from_img(nn.Module):
         self.conv6b  = conv(196,196, kernel_size=3, stride=1)
 
         # self.corr    = Correlation(pad_size=md, kernel_size=1, max_displacement=md, stride1=1, stride2=1, corr_multiply=1)
-        self.corr_block = correlation.FunctionCorrelation
+        # self.corr_block = correlation.FunctionCorrelation
+        self.search_range=4
+        self.corr_block = arflow_corr(pad_size=self.search_range, kernel_size=1,
+                        max_displacement=self.search_range, stride1=1,
+                        stride2=1, corr_multiply=1)
         
 
         self.leakyRELU = nn.LeakyReLU(0.1)
@@ -213,7 +219,7 @@ class PWCDecoder_from_img(nn.Module):
         
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal(m.weight.data, mode='fan_in')
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
                 if m.bias is not None:
                     m.bias.data.zero_()
 
@@ -239,9 +245,9 @@ class PWCDecoder_from_img(nn.Module):
         vgrid[:,0,:,:] = 2.0*vgrid[:,0,:,:].clone() / max(W-1,1)-1.0
         vgrid[:,1,:,:] = 2.0*vgrid[:,1,:,:].clone() / max(H-1,1)-1.0
         vgrid = vgrid.permute(0,2,3,1)        
-        output = nn.functional.grid_sample(x, vgrid)
+        output = nn.functional.grid_sample(x, vgrid, align_corners=True)
         mask = torch.autograd.Variable(torch.ones(x.size(), device=device))
-        mask = nn.functional.grid_sample(mask, vgrid)
+        mask = nn.functional.grid_sample(mask, vgrid, align_corners=True)
 
         # if W==128:
             # np.save('mask.npy', mask.cpu().data.numpy())
@@ -284,7 +290,8 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((self.conv6_3(x), x),1)
         x = torch.cat((self.conv6_4(x), x),1)
         flow6 = self.predict_flow6(x)
-        up_flow6 = self.deconv6(flow6)
+        # up_flow6 = self.deconv6(flow6)
+        up_flow6 = F.interpolate(flow6 ,scale_factor=2, mode='bilinear', align_corners=True)
         up_feat6 = self.upfeat6(x)
 
         
@@ -298,7 +305,9 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((self.conv5_3(x), x),1)
         x = torch.cat((self.conv5_4(x), x),1)
         flow5 = self.predict_flow5(x)
-        up_flow5 = self.deconv5(flow5)
+        # up_flow5 = self.deconv5(flow5)
+        up_flow5 = F.interpolate(flow5 ,scale_factor=2, mode='bilinear', align_corners=True)
+
         up_feat5 = self.upfeat5(x)
 
        
@@ -312,7 +321,9 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((self.conv4_3(x), x),1)
         x = torch.cat((self.conv4_4(x), x),1)
         flow4 = self.predict_flow4(x)
-        up_flow4 = self.deconv4(flow4)
+        up_flow4 = F.interpolate(flow4 ,scale_factor=2, mode='bilinear', align_corners=True)
+
+        # up_flow4 = self.deconv4(flow4)
         up_feat4 = self.upfeat4(x)
 
 
@@ -328,7 +339,10 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((self.conv3_3(x), x),1)
         x = torch.cat((self.conv3_4(x), x),1)
         flow3 = self.predict_flow3(x)
-        up_flow3 = self.deconv3(flow3)
+        # up_flow3 = self.deconv3(flow3)
+        up_flow3 = F.interpolate(flow3 ,scale_factor=2, mode='bilinear', align_corners=True)
+
+
         up_feat3 = self.upfeat3(x)
 
 
@@ -345,11 +359,20 @@ class PWCDecoder_from_img(nn.Module):
  
         x = self.dc_conv4(self.dc_conv3(self.dc_conv2(self.dc_conv1(x))))
         flow2 = flow2 + self.dc_conv7(self.dc_conv6(self.dc_conv5(x)))
-        flow2 = self.upsample_conv(flow2)
-        flow3 = self.upsample_conv(flow3)
-        flow4 = self.upsample_conv(flow4)
-        flow5 = self.upsample_conv(flow5)
-        flow6 = self.upsample_conv(flow6)
+        # flow2 = self.upsample_conv(flow2)
+        # flow3 = self.upsample_conv(flow3)
+        # flow4 = self.upsample_conv(flow4)
+        # flow5 = self.upsample_conv(flow5)
+        # flow6 = self.upsample_conv(flow6)
+        
+        
+        flow2 = F.interpolate(flow2, scale_factor=4, mode='bilinear', align_corners=True)
+        flow3 = F.interpolate(flow3, scale_factor=4, mode='bilinear', align_corners=True)
+        flow4 = F.interpolate(flow4, scale_factor=4, mode='bilinear', align_corners=True)
+        flow5 = F.interpolate(flow5, scale_factor=4, mode='bilinear', align_corners=True)
+        flow6 = F.interpolate(flow6, scale_factor=4, mode='bilinear', align_corners=True)
+        
+        
         out = {'level0':flow2, 'level1':flow3, 'level2':flow4, 'level3':flow5, 'level4':flow6}
         return out
     
@@ -480,7 +503,7 @@ class PWCDecoder(nn.Module):
         
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-                nn.init.kaiming_normal(m.weight.data, mode='fan_in')
+                nn.init.kaiming_normal_(m.weight.data, mode='fan_in')
                 if m.bias is not None:
                     m.bias.data.zero_()
 
@@ -506,9 +529,9 @@ class PWCDecoder(nn.Module):
         vgrid[:,0,:,:] = 2.0*vgrid[:,0,:,:].clone() / max(W-1,1)-1.0
         vgrid[:,1,:,:] = 2.0*vgrid[:,1,:,:].clone() / max(H-1,1)-1.0
         vgrid = vgrid.permute(0,2,3,1)        
-        output = nn.functional.grid_sample(x, vgrid)
+        output = nn.functional.grid_sample(x, vgrid, align_corners=True)
         mask = torch.autograd.Variable(torch.ones(x.size(), device=device))
-        mask = nn.functional.grid_sample(mask, vgrid)
+        mask = nn.functional.grid_sample(mask, vgrid, align_corners=True)
 
         # if W==128:
             # np.save('mask.npy', mask.cpu().data.numpy())
