@@ -647,7 +647,6 @@ class DDP_Trainer():
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "ARFlow":
-
             cfg = {"n_frames": 2,
            "reduce_dense": True,
            "type": "pwclite",
@@ -858,20 +857,26 @@ class DDP_Trainer():
                     # image2 = F.resize(image2, size=[192, 640], antialias=False)
                     input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
                     image1, image2, image1
-                    out_dict = self.ddp_model(input_dict)
-                    flow_1_2 = out_dict['flow', -1, 0, 0][0]
+                    if opt.model_name=="PWC_from_img":
+                        out_dict = self.ddp_model(image1, image2)
+                        flow_1_2 = out_dict['level0'][0]
+                    else:
+                        out_dict = self.ddp_model(input_dict)
+                        flow_1_2 = out_dict['flow', -1, 0, 0][0]
                 flow = padder.unpad(flow_1_2).cpu()
                 epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
                 mag = torch.sum(flow_gt**2, dim=0).sqrt()
 
                 # vis
-                err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
-                err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
-                err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
-                to_save = mono_utils.stitching_and_show(img_list=[image1[0], flow, flow_gt, err_map_colored_tensor, image2[0]],
-                                                        ver=True, show=False)
-                save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
-                to_save.save(save_path)
+                if self.epoch % 20 ==0:
+                    err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
+                    err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
+                    err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
+                    to_save = mono_utils.stitching_and_show(img_list=[image1[0], flow, flow_gt, err_map_colored_tensor, image2[0]],
+                                                            ver=True, show=False)
+                    save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
+                    to_save.save(save_path)
+                
                 epe = epe.view(-1)
                 mag = mag.view(-1)
                 val = valid_gt.view(-1) >= 0.5
