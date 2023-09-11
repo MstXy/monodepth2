@@ -593,7 +593,7 @@ if __name__ == "__main__":
         opts.eval_mono = True
         opts.load_weights_folder =  "~/tmp/repcv_c/models/weights_14"
     
-    weights_folder = "/mnt/km-nfs/ns100002-share/zcy-exp/tmp/mb_vitv3_att2_xs_dwc_d64b8/models/weights_"
+    weights_folder = "/mnt/km-nfs/ns100002-share/zcy-exp/tmp/mb_vitv3_eff_xs_new_b16_e40_do/models/weights_"
 
-    opts.load_weights_folder = weights_folder + str(23)
+    opts.load_weights_folder = weights_folder + str(24)
     evaluate(opts, options.parser)

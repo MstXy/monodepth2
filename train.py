@@ -26,5 +26,6 @@ def set_seed(seed):
 set_seed(42)
 
 if __name__ == "__main__":
+    torch.set_num_threads(10)
     trainer = Trainer(opts, parser=options.parser)
     trainer.train()

@@ -57,11 +57,11 @@ class MonodepthOptions:
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
-                                 default=192) # 192
+                                 default=320) # 192
         self.parser.add_argument("--width",
                                  type=int,
                                  help="input image width",
-                                 default=640) # 640
+                                 default=1024) # 640
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -208,11 +208,11 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20) # 20
+                                 default=30) # 20
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=15)
+                                 default=22)
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",

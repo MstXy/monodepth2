@@ -140,7 +140,7 @@ class EfficientDecoder(nn.Module):
     def __init__(self, num_ch_enc, epsilon=1e-4):
         super(EfficientDecoder, self).__init__()
         bottleneck = 64
-        # self.do = nn.Dropout(p=0.5)
+        self.do = nn.Dropout(p=0.5)
 
         self.iconv5_0 = SeparableConvBlock(num_ch_enc[4], bottleneck)
         self.iconv4_0 = SeparableConvBlock(num_ch_enc[3], bottleneck)
@@ -184,8 +184,8 @@ class EfficientDecoder(nn.Module):
         self.outputs = {}
         l1, l2, l3, l4, l5 = input_features
 
-        l5 = self.iconv5_0(l5)
-        l4 = self.iconv4_0(l4)
+        l5 = self.iconv5_0(self.do(l5))
+        l4 = self.iconv4_0(self.do(l4))
         l3 = self.iconv3_0(l3)
         l2 = self.iconv2_0(l2)
         l1 = self.iconv1_0(l1)

@@ -77,6 +77,8 @@ class DepthDecoder(nn.Module):
         # decoder
         self.convs = OrderedDict()
 
+        self.do = nn.Dropout(0.5)
+
         if self.cv_reproj:
             self.backproject_depth = backproject_depth
             self.project_3d = project_3d
@@ -201,7 +203,12 @@ class DepthDecoder(nn.Module):
         # decoder
         x = input_features[-1]
         for i in range(4, -1, -1):
+            ## apply dropout:
+            # if i in [3,4]:
+            #     x = self.convs[("upconv", i, 0)](self.do(x))
+            # else:
             x = self.convs[("upconv", i, 0)](x)
+                
             if self.drn:
                 x = [upsample(x)] if i not in [3, 4] else [x]
             else:

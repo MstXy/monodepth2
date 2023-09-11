@@ -18,12 +18,15 @@ import torch.utils.data as data
 from torchvision import transforms
 
 
+# def pil_loader(path):
+#     # open path as file to avoid ResourceWarning
+#     # (https://github.com/python-pillow/Pillow/issues/835)
+#     with open(path, 'rb') as f:
+#         with Image.open(f) as img:
+#             return img.convert('RGB')
+
 def pil_loader(path):
-    # open path as file to avoid ResourceWarning
-    # (https://github.com/python-pillow/Pillow/issues/835)
-    with open(path, 'rb') as f:
-        with Image.open(f) as img:
-            return img.convert('RGB')
+    return Image.open(path).convert('RGB')
 
 class ColorJitterAug(torch.nn.Module):
     def __init__(self, color_aug_params) -> None:
@@ -200,18 +203,20 @@ class MonoDataset(data.Dataset):
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
-        if do_color_aug:
-            color_aug_params = transforms.ColorJitter.get_params(
-                self.brightness, self.contrast, self.saturation, self.hue)
-            color_aug = ColorJitterAug(color_aug_params)
-        else:
-            color_aug = (lambda x: x)
+        # if do_color_aug:
+        #     color_aug_params = transforms.ColorJitter.get_params(
+        #         self.brightness, self.contrast, self.saturation, self.hue)
+        #     color_aug = ColorJitterAug(color_aug_params)
+        # else:
+        #     color_aug = (lambda x: x)
 
-        self.preprocess(inputs, color_aug)
+        # self.preprocess(inputs, color_aug)
 
-        for i in self.frame_idxs:
-            del inputs[("color", i, -1)]
-            del inputs[("color_aug", i, -1)]
+        for k in list(inputs):
+            if "color" in k:
+                n, im, i = k
+                inputs[(n, im, 0)] = self.to_tensor(self.resize[0](inputs[(n, im, -1)]))
+                del inputs[("color", im, -1)]
 
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)
@@ -237,5 +242,3 @@ class MonoDataset(data.Dataset):
 
     def get_depth(self, folder, frame_index, side, do_flip):
         raise NotImplementedError
-
-

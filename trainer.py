@@ -15,6 +15,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
+import torchvision.transforms as transforms
+
 
 import cupy as cp
 
@@ -47,8 +49,32 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 7 # change for # of GPU
+        self.DEVICE_NUM = 4 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
+
+        ##<<<<<<<< for input augmentation and resize >>>>>>>>>>>>
+        self.num_scales = len(self.opt.scales)
+        self.to_tensor = transforms.ToTensor()
+        # We need to specify augmentations differently in newer versions of torchvision.
+        # We first try the newer tuple version; if this fails we fall back to scalars
+        try:
+            self.brightness = (0.8, 1.2)
+            self.contrast = (0.8, 1.2)
+            self.saturation = (0.8, 1.2)
+            self.hue = (-0.1, 0.1)
+            transforms.ColorJitter.get_params(
+                self.brightness, self.contrast, self.saturation, self.hue)
+        except TypeError:
+            self.brightness = 0.2
+            self.contrast = 0.2
+            self.saturation = 0.2
+            self.hue = 0.1
+        self.resize = {}
+        for i in range(self.num_scales):
+            s = 2 ** i
+            self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
+                                               # interpolation=Image.ANTIALIAS)
+        ##>>>>>>>>>>>>> for input augmentation and resize <<<<<<<<<<<<<<<<
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -382,6 +408,30 @@ class Trainer:
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
+    
+    def preprocess(self, inputs):
+        color_aug = transforms.ColorJitter(
+            self.brightness, self.contrast, self.saturation, self.hue)
+        """Resize colour images to the required scales and augment if required
+
+                We create the color_aug object in advance and apply the same augmentation to all
+                images in this item. This ensures that all images input to the pose network receive the
+                same augmentation.
+                """
+
+        for k in list(inputs):
+            frame = inputs[k]
+            if "color" in k:
+                n, im, _ = k
+                for i in range(1, self.num_scales):
+                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
+
+        for k in list(inputs):
+            f = inputs[k]
+            if "color" in k:
+                n, im, i = k
+                # inputs[(n, im, i)] = (self.to_tensor(f))
+                inputs[(n + "_aug", im, i)] = color_aug(f)
 
     def run_epoch(self):
         """Run a single epoch of training and validation
@@ -425,6 +475,8 @@ class Trainer:
         """
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
+
+        self.preprocess(inputs)
 
         if self.opt.pose_model_type == "shared":
             # If we are using a shared encoder for both depth and pose (as advocated
