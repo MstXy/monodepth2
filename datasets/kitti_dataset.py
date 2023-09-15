@@ -143,7 +143,6 @@ class KITTIDepthDataset(KITTIDataset):
 
 
 import random
-from monodepth2.utils.utils import Tools as tools
 class KITTI_MV_2015(torch.utils.data.Dataset):
     def __init__(self, mv_data_dir, frame_ids=[-1, 0], height=192, witdth=640, mv_type='2015'):  # todo mv_type='2012' or '2015'
         super(KITTI_MV_2015, self).__init__()
@@ -184,7 +183,7 @@ class KITTI_MV_2015(torch.utils.data.Dataset):
     def mv15_data_get_file_names(self,):
         file_names_save_path = os.path.join(self.mv_data_dir, 'kitti_flow_2015_multiview_file_names.pkl')
         if os.path.isfile(file_names_save_path):
-            data = tools.pickle_saver.load_picke(file_names_save_path)
+            data = mono_utils.pickle_saver.load_picke(file_names_save_path)
             return data
         else:
             # mv_2012_file_name = 'data_stereo_flow_multiview.zip'
@@ -201,7 +200,7 @@ class KITTI_MV_2015(torch.utils.data.Dataset):
             if os.path.isdir(mv_2015_dir):
                 pass
             else:
-                tools.extract_zip(mv_2015_zip_file, mv_2015_dir)
+                mono_utils.extract_zip(mv_2015_zip_file, mv_2015_dir)
 
             def read_mv_data(d_path):
                 sample_ls = []
@@ -226,7 +225,7 @@ class KITTI_MV_2015(torch.utils.data.Dataset):
             filenames = {}
             # filenames['2012'] = read_mv_data(mv_2012_dir)
             filenames['2015'] = read_mv_data(mv_2015_dir)
-            tools.pickle_saver.save_pickle(files=filenames, file_path=file_names_save_path)
+            mono_utils.pickle_saver.save_pickle(files=filenames, file_path=file_names_save_path)
             return filenames
 
 

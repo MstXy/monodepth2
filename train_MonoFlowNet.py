@@ -533,7 +533,12 @@ def load_train_objs():
         # opt.height = 384
         # opt.width = 512
         opt.frame_ids=[-1, 0]
-    
+    elif opt.train_dataset in ['difint']:
+        from monodepth2.datasets.difint_dataset import DiFintDataset
+        train_dataset = DiFintDataset(frame_ids=opt.frame_ids, cam_idxs_list=['E'], num_scales=1)
+        # opt.height=256
+        # opt.width=640
+
     else:
         raise NotImplementedError
     

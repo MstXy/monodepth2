@@ -476,16 +476,20 @@ def length_sq(x):
 
 
 import pickle
-class Tools():
-    class pickle_saver():
 
-        @classmethod
-        def save_pickle(cls, files, file_path):
-            with open(file_path, 'wb') as data:
-                pickle.dump(files, data)
+class pickle_saver():
+    @classmethod
+    def save_pickle(cls, files, file_path):
+        with open(file_path, 'wb') as data:
+            pickle.dump(files, data)
 
-        @classmethod
-        def load_picke(cls, file_path):
-            with open(file_path, 'rb') as data:
-                data = pickle.load(data)
-            return data
+    @classmethod
+    def load_picke(cls, file_path):
+        with open(file_path, 'rb') as data:
+            data = pickle.load(data)
+        return data
+    
+    def extract_zip(cls, zip_path, extract_dir):
+        print('unzip file: %s' % zip_path)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)

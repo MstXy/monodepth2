@@ -23,7 +23,7 @@ class MonodepthOptions:
                                  type=str,
                                  help="dataset to train on",
                                  default="kitti",
-                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test", "kitti_mv15", "FlyingChairs"])
+                                 choices=["kitti", "kitti_odom", "kitti_depth", "kitti_test", "kitti_mv15", "FlyingChairs", "difint"])
         
         self.parser.add_argument("--data_path",
                                  type=str,
