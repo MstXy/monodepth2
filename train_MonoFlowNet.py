@@ -580,7 +580,6 @@ def prepare_dataloader(dataset):
     )
 
 
-
 class DDP_Trainer():
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
@@ -631,10 +630,10 @@ class DDP_Trainer():
 
 
         #################### model, optim, loss, loding and saving ####################
-        # from easydict import EasyDict 
-        # with open('/home/liu/data16t/Projects/optical_flow/ARFlow/configs/kitti_raw.json') as f:
-        #     cfg = EasyDict(json.load(f))
-        # self.arflow_loss = unFlowLoss(cfg=cfg)
+        from easydict import EasyDict 
+        with open('/home/wangshuo/LAB-Backup/Codes/test0821/monodepth2/ARFlow_losses/kitti_raw.json') as f:
+            cfg = EasyDict(json.load(f))
+        self.arflow_loss = unFlowLoss(cfg=cfg.loss)
         
         
         class Dict2Class(object):
@@ -648,12 +647,7 @@ class DDP_Trainer():
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "ARFlow":
-            cfg = {"n_frames": 2,
-           "reduce_dense": True,
-           "type": "pwclite",
-           "upsample": True}
-            cfg = Dict2Class(cfg)
-            self.model = PWCLite(cfg).to('cuda:' + str(self.gpu_id))
+            self.model = PWCLite(cfg.model).to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "PWC_from_img":
             self.model = PWCDecoder_from_img()
         else:
@@ -995,20 +989,38 @@ class DDP_Trainer():
         else:
             outputs = self.ddp_model(inputs)
 
+        if self.opt.loss_type == 'arflowloss':
+            pyramid_flows = []
+            for idx_pair in self.idx_pair_list:
+                for scale in self.opt.scales:
+                    pyramid_flows.append(
+                        torch.cat(
+                        (outputs[('flow', idx_pair[0], idx_pair[1], scale)], outputs[('flow', idx_pair[1], idx_pair[0], scale)]), 
+                        dim=1)
+                        )
+                target = torch.cat((inputs['color_aug', idx_pair[0], 0], inputs['color_aug', idx_pair[1], 0]), dim=1)
+            
+            losses = {}
+            loss, l_ph_pyramid, l_sm_pyramid, flow_mean, pyramid_occ_mask1, pyramid_occ_mask2, \
+                pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target)
+            losses['loss'] = loss
+            
+            for scale in self.opt.scales:
+                losses['smo_loss_o1', scale] = l_sm_pyramid[scale]
+                losses['smo_loss_o2', scale] = l_sm_pyramid[scale]
+                losses['photo_loss_l1', scale] = l_ph_pyramid[scale]
+                losses['photo_loss_ssim', scale] = l_ph_pyramid[scale]
+                
+            for scale in self.opt.scales:
+                for idx_pair in self.idx_pair_list:
+                    outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = pyramid_im1_recons[scale]  # prev_img warped by curr_img and flow_prev_to_curr
+                    outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = pyramid_im2_recons[scale]   # curr_img warped by prev_img and flow_curr_to_prev
+                    outputs[('occ', idx_pair[0], idx_pair[1], scale)] = pyramid_occ_mask1[scale]
+                    outputs[('occ', idx_pair[1], idx_pair[0], scale)] = pyramid_occ_mask2[scale]
         
-        
-        losses = self.mono_loss.compute_losses(inputs, outputs)
-        
-        # losses = {}
-        # loss, l_ph, l_sm, flow_mean, occ_mask = self.loss_func(flows, img_pair)
-        # losses['loss'] = loss
-        # losses['smo_loss_o1'] = l_sm[0]
-        # losses['smo_loss_o2'] = l_sm[1]
-        # losses['photo_loss_l1'] = l_ph[0]
-        # losses['photo_loss_ssim'] = l_ph[1]
-        
-        
-        
+        else:
+            losses = self.mono_loss.compute_losses(inputs, outputs)
+
         losses['loss'].backward()
         self.model_optimizer.step()
 
@@ -1040,6 +1052,7 @@ class DDP_Trainer():
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:
                 self.save_ddp_model()
                 self.eval_depth_flow()
+
 
 def ddp_setup(rank, world_size):
     """

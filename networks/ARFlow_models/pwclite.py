@@ -170,6 +170,7 @@ class PWCLite(nn.Module):
                            device=init_device).float()
 
         for l, (x1, x2) in enumerate(zip(x1_pyramid, x2_pyramid)):
+            print(x1.size())
             # warping
             if l == 0:
                 x2_warp = x2

@@ -36,15 +36,15 @@ class unFlowLoss(nn.modules.Module):
         loss += [func_smooth(flow, im1_scaled, self.cfg.alpha)]
         return sum([l.mean() for l in loss])
 
-    def forward(self, output, target):
+    def forward(self, pyramid_flows, target):
         """
 
-        :param output: Multi-scale forward/backward flows n * [B x 4 x h x w]
+        :param pyramid_flows: Multi-scale forward/backward flows n * [B x 4 x h x w]
         :param target: image pairs Nx6xHxW
         :return:
         """
-
-        pyramid_flows = output
+        
+        
         im1_origin = target[:, :3]
         im2_origin = target[:, 3:]
 
@@ -52,6 +52,8 @@ class unFlowLoss(nn.modules.Module):
         pyramid_warp_losses = []
         self.pyramid_occu_mask1 = []
         self.pyramid_occu_mask2 = []
+        self.pyramid_im1_recons = []
+        self.pyramid_im2_recons = []
 
         s = 1.
         for i, flow in enumerate(pyramid_flows):
@@ -66,8 +68,12 @@ class unFlowLoss(nn.modules.Module):
             im1_scaled = F.interpolate(im1_origin, (h, w), mode='area')
             im2_scaled = F.interpolate(im2_origin, (h, w), mode='area')
 
-            im1_recons = flow_warp(im2_scaled, flow[:, :2], pad=self.cfg.warp_pad)
-            im2_recons = flow_warp(im1_scaled, flow[:, 2:], pad=self.cfg.warp_pad)
+            # im1_recons = flow_warp(im2_scaled, flow[:, :2], pad=self.cfg.warp_pad)
+            # im2_recons = flow_warp(im1_scaled, flow[:, 2:], pad=self.cfg.warp_pad)
+            im1_recons = flow_warp(im2_scaled, flow[:, :2])
+            im2_recons = flow_warp(im1_scaled, flow[:, 2:])
+            self.pyramid_im1_recons.append(im1_recons)
+            self.pyramid_im2_recons.append(im2_recons)
 
             if i == 0:
                 if self.cfg.occ_from_back:
@@ -112,4 +118,5 @@ class unFlowLoss(nn.modules.Module):
         smooth_loss = self.cfg.w_smooth * sum(pyramid_smooth_losses)
         total_loss = warp_loss + smooth_loss
 
-        return total_loss, warp_loss, smooth_loss, pyramid_flows[0].abs().mean(), self.pyramid_occu_mask1
+        return total_loss, pyramid_warp_losses, pyramid_smooth_losses, pyramid_flows[0].abs().mean(), \
+            self.pyramid_occu_mask1, self.pyramid_occu_mask2, self.pyramid_im1_recons, self.pyramid_im2_recons

@@ -127,6 +127,12 @@ class MonodepthOptions:
         
         
         # LOSS WEIGHTS
+        self.parser.add_argument("--loss_type",
+                                    type=str,
+                                    help="loss type",
+                                    default=None,
+        )
+        
         self.parser.add_argument("--loss_smo1_w",
                                  nargs="+",
                                  type=float,
