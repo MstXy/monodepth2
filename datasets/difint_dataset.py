@@ -57,7 +57,7 @@ class DiFintDataset(data.Dataset):
         for i in range(0, self.num_scales):
             h = self.img_height // (2 ** i)
             w = self.img_width // (2 ** i)
-            self.resize.append(transforms.Resize((h, w), interpolation=interp))
+            self.resize.append(transforms.Resize((h, w), interpolation=interp, antialias=True))
         self.filenames = self.get_filenames()
 
     def get_filenames(self):
