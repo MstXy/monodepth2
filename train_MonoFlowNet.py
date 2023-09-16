@@ -40,6 +40,7 @@ from monodepth2.networks.MonoFlowNet import MonoFlowNet
 from monodepth2.networks.UnFlowNet import UnFlowNet
 from monodepth2.networks.ARFlow_models.pwclite import PWCLite
 from monodepth2.networks.pwc_decoder_ori import PWCDecoder_from_img
+from monodepth2.networks.ARFlow_models.pwclite_withResNet import PWCLiteWithResNet
 from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
@@ -636,7 +637,8 @@ class DDP_Trainer():
 
         #################### model, optim, loss, loding and saving ####################
         from easydict import EasyDict 
-        with open('/home/wangshuo/LAB-Backup/Codes/test0821/monodepth2/ARFlow_losses/kitti_raw.json') as f:
+        curr_file_path = os.path.dirname(os.path.realpath(__file__))
+        with open(os.path.join(curr_file_path,'ARFlow_losses/kitti_raw.json')) as f:
             cfg = EasyDict(json.load(f))
         self.arflow_loss = unFlowLoss(cfg=cfg.loss)
         
@@ -655,6 +657,9 @@ class DDP_Trainer():
             self.model = PWCLite(cfg.model).to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "PWC_from_img":
             self.model = PWCDecoder_from_img()
+        elif self.opt.model_name =="PWC_lite_resnet":
+            self.model = PWCLiteWithResNet(cfg.model).to('cuda:' + str(self.gpu_id))
+                
         else:
             raise NotImplementedError
         
