@@ -507,10 +507,6 @@ class MonoFlowLoss():
         return alpha * ssim_loss + (1-alpha) * l1_loss
 
 
-
-
-
-
 def load_train_objs():
     # ====== 1.train dataset: kitti flow and depth
     if opt.train_dataset in ['kitti']:
@@ -639,8 +635,8 @@ class DDP_Trainer():
         from easydict import EasyDict 
         curr_file_path = os.path.dirname(os.path.realpath(__file__))
         with open(os.path.join(curr_file_path,'ARFlow_losses/kitti_raw.json')) as f:
-            cfg = EasyDict(json.load(f))
-        self.arflow_loss = unFlowLoss(cfg=cfg.loss)
+            self.cfg = EasyDict(json.load(f))
+        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss)
         
         
         class Dict2Class(object):
@@ -654,11 +650,11 @@ class DDP_Trainer():
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "ARFlow":
-            self.model = PWCLite(cfg.model).to('cuda:' + str(self.gpu_id))
+            self.model = PWCLite(self.cfg.model).to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "PWC_from_img":
             self.model = PWCDecoder_from_img()
         elif self.opt.model_name =="PWC_lite_resnet":
-            self.model = PWCLiteWithResNet(cfg.model).to('cuda:' + str(self.gpu_id))
+            self.model = PWCLiteWithResNet(self.cfg.model).to('cuda:' + str(self.gpu_id))
                 
         else:
             raise NotImplementedError
@@ -1055,8 +1051,15 @@ class DDP_Trainer():
         self.start_time = time.time()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
+            
+            if 'stage1' in self.cfg.train:
+                if self.epoch >= self.cfg.train.stage1.epoch:
+                    self.arflow_loss.cfg.update(self.cfg.train.stage1.loss)
+                    print('\n ==========update loss function to stage1 loss========== \n')
+                    
             if self.epoch > self.opt.occ_start_epoch:
                 opt.flow_occ_check = True
+                
             self._run_epoch()
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:
