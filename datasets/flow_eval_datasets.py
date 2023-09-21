@@ -237,8 +237,13 @@ class FlyingThings3D(FlowDataset):
       
 
 class KITTI_2015_scene_flow(FlowDataset):
-    def __init__(self, aug_params=None, split='training', root='/home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/data_scene_flow'):
+    def __init__(self, aug_params=None, split='training', 
+                 root='/home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/data_scene_flow',
+                 occ_noc='flow_occ'):
         super(KITTI_2015_scene_flow, self).__init__(aug_params, sparse=True)
+        self.occ_noc = occ_noc
+        
+        
         if split == 'testing':
             self.is_test = True
 
@@ -252,7 +257,7 @@ class KITTI_2015_scene_flow(FlowDataset):
             self.image_list += [ [img1, img2] ]
 
         if split == 'training':
-            self.flow_list = sorted(glob(osp.join(root, 'flow_occ/*_10.png')))
+            self.flow_list = sorted(glob(osp.join(root, self.occ_noc, '*_10.png')))
 
 
 class HD1K(FlowDataset):

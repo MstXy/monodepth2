@@ -835,68 +835,210 @@ class DDP_Trainer():
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
-        if self.opt.optical_flow:
+        resize_mode = False # pad mode or resize mode
+        if self.opt.optical_flow and not resize_mode:
             self.ddp_model.eval()
-            """ Peform validation using the KITTI-2015 (train) split """
-            val_dataset = flow_eval_datasets.KITTI_2015_scene_flow(split='training', root=self.opt.val_data_root)
             out_list, epe_list = [], []
-            save_path_dir = os.path.join(self.log_path, 'evaluate_flow_kitti')
-            os.makedirs(save_path_dir, exist_ok=True)
-            for val_id in range(len(val_dataset)):
-                input_dict = val_dataset[val_id]
-                # {('color', -1, 0): img1, ('color', 0, 0): img2, ('flow', -1, 0): flow, ('valid', -1, 0): valid}
-                image1_ori, image2_ori, flow_gt, valid_gt = input_dict[('color', -1, 0)], input_dict[('color', 0, 0)], \
-                                                            input_dict[('flow', -1, 0)], input_dict[('valid', -1, 0)]   
+            out_list_occ, epe_list_occ = [], []
+            out_list_noc, epe_list_noc = [], []
+            for occ_noc in ['flow_occ', 'flow_noc']:
+                """ Peform validation using the KITTI-2015 (train) split """
+                val_dataset = flow_eval_datasets.KITTI_2015_scene_flow(split='training', root=self.opt.val_data_root, occ_noc=occ_noc)
+                save_path_dir = os.path.join(self.log_path, occ_noc+'evaluate_flow_kitti')
                 
-                image1_ori = image1_ori[None].to(self.gpu_id)
-                image2_ori = image2_ori[None].to(self.gpu_id)
-                if opt.norm_trans:
-                    image1_ori = self.norm_trans(image1_ori)
-                    image2_ori = self.norm_trans(image2_ori)
-                
-                padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
-                image1, image2 = padder.pad(image1_ori, image2_ori)
-                with torch.no_grad():
-                    input_dict = {}
-                    # image1 = F.resize(image1, size=[192, 640], antialias=False)
-                    # image2 = F.resize(image2, size=[192, 640], antialias=False)
-                    input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
-                    image1, image2, image1
-                    if opt.model_name=="PWC_from_img":
-                        out_dict = self.ddp_model(image1, image2)
-                        flow_1_2 = out_dict['level0'][0]
-                    else:
-                        out_dict = self.ddp_model(input_dict)
-                        flow_1_2 = out_dict['flow', -1, 0, 0][0]
-                flow = padder.unpad(flow_1_2).cpu()
-                epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
-                mag = torch.sum(flow_gt**2, dim=0).sqrt()
-
-                # vis
-                if self.epoch % 20 ==0:
-                    err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
-                    err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
-                    err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
-                    to_save = mono_utils.stitching_and_show(img_list=[image1[0], flow, flow_gt, err_map_colored_tensor, image2[0]],
-                                                            ver=True, show=False)
-                    save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
-                    to_save.save(save_path)
-                
-                epe = epe.view(-1)
-                mag = mag.view(-1)
-                val = valid_gt.view(-1) >= 0.5
-                out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
-                epe_list.append(epe[val].mean().item())
-                out_list.append(out[val].cpu().numpy())
+                os.makedirs(save_path_dir, exist_ok=True)
+                for val_id in range(len(val_dataset)):
+                    input_dict = val_dataset[val_id]
+                    # {('color', -1, 0): img1, ('color', 0, 0): img2, ('flow', -1, 0): flow, ('valid', -1, 0): valid}
+                    image1_ori, image2_ori, flow_gt, valid_gt = input_dict[('color', -1, 0)], input_dict[('color', 0, 0)], \
+                                                                input_dict[('flow', -1, 0)], input_dict[('valid', -1, 0)]   
+                    
+                    image1_ori = image1_ori[None].to(self.gpu_id)
+                    image2_ori = image2_ori[None].to(self.gpu_id)
+                    if opt.norm_trans:
+                        image1_ori = self.norm_trans(image1_ori)
+                        image2_ori = self.norm_trans(image2_ori)
+                    
+                    padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64, mode='constant') #'constant', 'reflect', 'replicate' or 'circular'. Default: 'constant'
+                    image1, image2 = padder.pad(image1_ori, image2_ori)
+                    with torch.no_grad():
+                        input_dict = {}
+                        if len(self.opt.frame_ids)==3:
+                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                            image1, image2, image1
+                        elif len(self.opt.frame_ids)==2:
+                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)] = image1, image2
+                            
+                        if opt.model_name=="PWC_from_img":
+                            out_dict = self.ddp_model(image1, image2)
+                            flow_1_2 = out_dict['level0'][0]
+                        else:
+                            out_dict = self.ddp_model(input_dict)
+                            flow_1_2 = out_dict['flow', -1, 0, 0][0]
+                    flow = padder.unpad(flow_1_2).cpu()
+                    epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
+                    mag = torch.sum(flow_gt**2, dim=0).sqrt()
+                    
+                    # vis
+                    if (self.epoch+1) % 10 ==0:
+                        err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
+                        err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
+                        err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
+                        to_save = mono_utils.stitching_and_show(img_list=[image1[0], flow, flow_gt, err_map_colored_tensor, image2[0]],
+                                                                ver=True, show=False)
+                        save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
+                        to_save.save(save_path)
+                    
+                    epe = epe.view(-1)
+                    mag = mag.view(-1)
+                    val = valid_gt.view(-1) >= 0.5
+                    out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
+                    epe_tmp = epe[val].mean().item()
+                    out_tmp = out[val].cpu().numpy()
+                    epe_list.append(epe_tmp)
+                    out_list.append(out_tmp)
+                    if occ_noc == 'flow_occ':
+                        epe_list_occ.append(epe_tmp)
+                        out_list_occ.append(out_tmp)
+                    elif occ_noc == 'flow_noc':
+                        epe_list_noc.append(epe_tmp)
+                        out_list_noc.append(out_tmp)
+                    
+                    
 
             epe_list = np.array(epe_list)
             out_list = np.concatenate(out_list)
-            epe = np.mean(epe_list)
-            f1 = 100 * np.mean(out_list)
-            print("\n Validation KITTI \n: %f, %f" % (epe, f1))
+            epe_all = np.mean(epe_list)
+            f1_all = 100 * np.mean(out_list)
+            
+            epe_list_occ = np.array(epe_list_occ)
+            out_list_occ = np.concatenate(out_list_occ)
+            epe_occ = np.mean(epe_list_occ)
+            f1_occ = 100 * np.mean(out_list_occ)
+            
+            epe_list_noc = np.array(epe_list_noc)
+            out_list_noc = np.concatenate(out_list_noc)            
+            epe_noc = np.mean(epe_list_noc)
+            f1_noc = 100 * np.mean(out_list_noc)
+            
+            print("\n Validation KITTI epe_all, f1_all\n: %f, %f" % (epe_all, f1_all))
+            print("\n Validation KITTI epe_occ, f1_occ\n: %f, %f" % (epe_occ, f1_occ))
+            print("\n Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
+            
             writer = self.writers['val']
-            writer.add_scalar('kitti_epe', epe, self.step)
-            writer.add_scalar('kitti_f1', f1, self.step)
+            writer.add_scalar('kitti_epe', epe_all, self.step)
+            writer.add_scalar('kitti_f1', f1_all, self.step)
+            writer.add_scalar('kitti_epe_occ', epe_occ, self.step)
+            writer.add_scalar('kitti_f1_occ', f1_occ, self.step)
+            writer.add_scalar('kitti_epe_noc', epe_noc, self.step)
+            writer.add_scalar('kitti_f1_noc', f1_noc, self.step)
+            
+        if self.opt.optical_flow and resize_mode:
+            self.ddp_model.eval()
+            out_list, epe_list = [], []
+            out_list_occ, epe_list_occ = [], []
+            out_list_noc, epe_list_noc = [], []
+            resize_to_train_size = transforms.Resize((self.opt.height, self.opt.width), antialias=True)
+            for occ_noc in ['flow_occ', 'flow_noc']:
+                """ Peform validation using the KITTI-2015 (train) split """
+                val_dataset = flow_eval_datasets.KITTI_2015_scene_flow(split='training', root=self.opt.val_data_root, occ_noc=occ_noc)
+                save_path_dir = os.path.join(self.log_path, occ_noc+'evaluate_flow_kitti')
+                
+                os.makedirs(save_path_dir, exist_ok=True)
+                for val_id in range(len(val_dataset)):
+                    input_dict = val_dataset[val_id]
+                    # {('color', -1, 0): img1, ('color', 0, 0): img2, ('flow', -1, 0): flow, ('valid', -1, 0): valid}
+                    image1_ori, image2_ori, flow_gt, valid_gt = input_dict[('color', -1, 0)], input_dict[('color', 0, 0)], \
+                                                                input_dict[('flow', -1, 0)], input_dict[('valid', -1, 0)]   
+                    _, H, W = image1_ori.shape
+                    image1_ori = image1_ori[None].to(self.gpu_id)
+                    image2_ori = image2_ori[None].to(self.gpu_id)
+                    flow_gt = flow_gt.to(self.gpu_id)
+                    valid_gt = valid_gt.to(self.gpu_id)
+                    if opt.norm_trans:
+                        image1_ori = self.norm_trans(image1_ori)
+                        image2_ori = self.norm_trans(image2_ori)
+                    
+                    padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64)
+                    # image1, image2 = padder.pad(image1_ori, image2_ori)
+                    image1 = resize_to_train_size(image1_ori)
+                    image2 = resize_to_train_size(image2_ori)
+                    
+                    with torch.no_grad():
+                        input_dict = {}
+                        # image1 = F.resize(image1, size=[192, 640], antialias=False)
+                        # image2 = F.resize(image2, size=[192, 640], antialias=False)
+                        input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                        image1, image2, image1
+                        if opt.model_name=="PWC_from_img":
+                            out_dict = self.ddp_model(image1, image2)
+                            flow_1_2 = out_dict['level0'][0]
+                        else:
+                            out_dict = self.ddp_model(input_dict)
+                            flow_1_2 = out_dict['flow', -1, 0, 0][0]
+                    # flow = padder.unpad(flow_1_2).cpu()
+                    flow_1_2[0, :, :] = flow_1_2[0, :, :] / self.opt.width * W
+                    flow_1_2[1, :, :] = flow_1_2[1, :, :] / self.opt.height * H 
+                    resize_to_val_size = transforms.Resize((H, W), antialias=True)
+                    flow = resize_to_val_size(flow_1_2[None])[0]
+
+                    epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
+                    mag = torch.sum(flow_gt**2, dim=0).sqrt()
+                    
+                    # vis
+                    if (self.epoch+1) % 10 ==0:
+                        err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0).cpu()
+                        err_map_norm = colors.Normalize(vmin=0, vmax=torch.max(err_map))
+                        err_map_colored_tensor = mono_utils.plt_color_map_to_tensor(cmap(err_map_norm(err_map)))
+                        to_save = mono_utils.stitching_and_show(img_list=[image1_ori[0], flow, flow_gt, err_map_colored_tensor, image2_ori[0]],
+                                                                ver=True, show=False)
+                        save_path = os.path.join(save_path_dir, str(self.epoch) + "th_epoch_" + datetime.now().strftime("%Y-%m-%d_%H-%M-%S")+".png")
+                        to_save.save(save_path)
+                    
+                    epe = epe.view(-1)
+                    mag = mag.view(-1)
+                    val = valid_gt.view(-1) >= 0.5
+                    out = ((epe > 3.0) & ((epe/mag) > 0.05)).float()
+                    epe_tmp = epe[val].mean().item()
+                    out_tmp = out[val].cpu().numpy()
+                    epe_list.append(epe_tmp)
+                    out_list.append(out_tmp)
+                    if occ_noc == 'flow_occ':
+                        epe_list_occ.append(epe_tmp)
+                        out_list_occ.append(out_tmp)
+                    elif occ_noc == 'flow_noc':
+                        epe_list_noc.append(epe_tmp)
+                        out_list_noc.append(out_tmp)
+                    
+                    
+
+            epe_list = np.array(epe_list)
+            out_list = np.concatenate(out_list)
+            epe_all = np.mean(epe_list)
+            f1_all = 100 * np.mean(out_list)
+            
+            epe_list_occ = np.array(epe_list_occ)
+            out_list_occ = np.concatenate(out_list_occ)
+            epe_occ = np.mean(epe_list_occ)
+            f1_occ = 100 * np.mean(out_list_occ)
+            
+            epe_list_noc = np.array(epe_list_noc)
+            out_list_noc = np.concatenate(out_list_noc)            
+            epe_noc = np.mean(epe_list_noc)
+            f1_noc = 100 * np.mean(out_list_noc)
+            
+            print("\n Validation KITTI epe_all, f1_all\n: %f, %f" % (epe_all, f1_all))
+            print("\n Validation KITTI epe_occ, f1_occ\n: %f, %f" % (epe_occ, f1_occ))
+            print("\n Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
+            
+            writer = self.writers['val']
+            writer.add_scalar('kitti_epe', epe_all, self.step)
+            writer.add_scalar('kitti_f1', f1_all, self.step)
+            writer.add_scalar('kitti_epe_occ', epe_occ, self.step)
+            writer.add_scalar('kitti_f1_occ', f1_occ, self.step)
+            writer.add_scalar('kitti_epe_noc', epe_noc, self.step)
+            writer.add_scalar('kitti_f1_noc', f1_noc, self.step)
+            
 
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
@@ -1051,6 +1193,7 @@ class DDP_Trainer():
         self.start_time = time.time()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
+            self.eval_depth_flow()
             
             if 'stage1' in self.cfg.train:
                 if self.epoch >= self.cfg.train.stage1.epoch:

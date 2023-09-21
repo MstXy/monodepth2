@@ -19,17 +19,18 @@ import flow_vis
 
 class InputPadder:
     """ Pads images such that dimensions are divisible by 'divided_by' :int """
-    def __init__(self, dims, mode='sintel', divided_by=8):
+    def __init__(self, dims, pad_mode, mode='sintel', divided_by=8):
         self.ht, self.wd = dims[-2:]
         pad_ht = (((self.ht // divided_by) + 1) * divided_by - self.ht) % divided_by
         pad_wd = (((self.wd // divided_by) + 1) * divided_by - self.wd) % divided_by
+        self.pad_mode = pad_mode
         if mode == 'sintel':
             self._pad = [pad_wd // 2, pad_wd - pad_wd // 2, pad_ht // 2, pad_ht - pad_ht // 2]
         else:
             self._pad = [pad_wd // 2, pad_wd - pad_wd // 2, 0, pad_ht]
 
     def pad(self, *inputs):
-        return [F.pad(x, self._pad, mode='replicate') for x in inputs]
+        return [F.pad(x, self._pad, mode=self.pad_mode) for x in inputs]
         #  padding for the left, top, right and bottom borders respectively
 
     def unpad(self, x):

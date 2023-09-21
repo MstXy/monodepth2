@@ -258,7 +258,6 @@ class PWCLite(nn.Module):
     def forward(self, input_dict, with_bk=True):
         img1, img2 = input_dict[('color_aug', -1, 0)], input_dict[('color_aug', 0, 0)]
         x = torch.cat([img1, img2], dim=1)
-        
         n_frames = x.size(1) / 3
 
         imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
