@@ -32,6 +32,10 @@ from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
 from networks.mobilevit.build_mobileViTv3 import MobileViT
+from networks.mobilevit.misc.averaging_utils import EMA
+from networks.mobilevit.utils.checkpoint_utils import copy_weights
+
+
 from IPython import embed
 
 
@@ -125,8 +129,32 @@ class Trainer:
             self.opt.mobile_backbone = "vatt2"
         elif self.opt.encoder == "mobilevitv3_xs":
             print("using MobileViTv3_XS as backbone")
-            self.models["encoder"] = MobileViT(parser)
+            self.models["encoder"] = MobileViT(parser, self.opt.encoder)
             self.opt.mobile_backbone = "mbvitv3_xs"
+            self.use_ema = self.models["encoder"].use_ema
+            if self.use_ema:
+                print("using EMA")
+                self.model_ema = EMA(
+                    model=self.models["encoder"],
+                    ema_momentum=self.models["encoder"].ema_momentum,
+                    device=self.device
+                )
+            else:
+                self.model_ema = None
+        elif self.opt.encoder ==  "mobilevitv3_s":
+            print("using MobileViTv3_S as backbone")
+            self.models["encoder"] = MobileViT(parser, self.opt.encoder)
+            self.opt.mobile_backbone = "mbvitv3_s"
+            self.use_ema = self.models["encoder"].use_ema
+            if self.use_ema:
+                print("using EMA")
+                self.model_ema = EMA(
+                    model=self.models["encoder"],
+                    ema_momentum=self.models["encoder"].ema_momentum,
+                    device=self.device
+                )
+            else:
+                self.model_ema = None
         else:
             self.opt.mobile_backbone = None
             # dilated ResNet?
@@ -451,6 +479,9 @@ class Trainer:
             losses["loss"].backward()
             self.model_optimizer.step()
 
+            if self.model_ema is not None:
+                self.model_ema.update_parameters(self.models["encoder"])
+
             duration = time.time() - before_op_time
 
             # log less frequently after the first 2000 steps to save time & disk space
@@ -469,6 +500,7 @@ class Trainer:
             self.step += 1
         
         self.model_lr_scheduler.step()
+        # self.models["encoder"] = copy_weights(model_tgt=self.models["encoder"], model_src=self.model_ema)
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
@@ -984,6 +1016,9 @@ class Trainer:
         save_folder = os.path.join(self.log_path, "models", "weights_{}".format(self.epoch))
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
+        
+        if self.use_ema:
+            self.models["encoder"] = copy_weights(model_tgt=self.models["encoder"], model_src=self.model_ema)
 
         for model_name, model in self.models.items():
             save_path = os.path.join(save_folder, "{}.pth".format(model_name))

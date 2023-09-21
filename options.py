@@ -57,11 +57,11 @@ class MonodepthOptions:
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
-                                 default=320) # 192
+                                 default=192) # 192
         self.parser.add_argument("--width",
                                  type=int,
                                  help="input image width",
-                                 default=1024) # 640
+                                 default=640) # 640
         self.parser.add_argument("--disparity_smoothness",
                                  type=float,
                                  help="disparity smoothness weight",
@@ -93,9 +93,9 @@ class MonodepthOptions:
         self.parser.add_argument("--encoder",
                                  type=str,
                                  help="alternative encoder choices",
-                                 default="mobilevitv3_xs",
+                                 default="mobilevitv3_s",
                                  choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", 
-                                          "mobilevitv3_xs",
+                                          "mobilevitv3_xs","mobilevitv3_s"
                                           "None"])
         # -----------------------------
       #   # backbone EMA -----------
