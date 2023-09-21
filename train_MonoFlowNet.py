@@ -835,7 +835,7 @@ class DDP_Trainer():
                 self.log("val", inputs, outputs, losses)
                 del inputs, outputs, losses
 
-        resize_mode = False # pad mode or resize mode
+        resize_mode = True # pad mode or resize mode
         if self.opt.optical_flow and not resize_mode:
             self.ddp_model.eval()
             out_list, epe_list = [], []
@@ -921,9 +921,9 @@ class DDP_Trainer():
             epe_noc = np.mean(epe_list_noc)
             f1_noc = 100 * np.mean(out_list_noc)
             
-            print("\n Validation KITTI epe_all, f1_all\n: %f, %f" % (epe_all, f1_all))
-            print("\n Validation KITTI epe_occ, f1_occ\n: %f, %f" % (epe_occ, f1_occ))
-            print("\n Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
+            print("\n Validation KITTI epe_all, f1_all : %f, %f" % (epe_all, f1_all))
+            print(" Validation KITTI epe_occ, f1_occ : %f, %f" % (epe_occ, f1_occ))
+            print(" Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
             
             writer = self.writers['val']
             writer.add_scalar('kitti_epe', epe_all, self.step)
@@ -966,10 +966,12 @@ class DDP_Trainer():
                     
                     with torch.no_grad():
                         input_dict = {}
-                        # image1 = F.resize(image1, size=[192, 640], antialias=False)
-                        # image2 = F.resize(image2, size=[192, 640], antialias=False)
-                        input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
-                        image1, image2, image1
+                        if len(self.opt.frame_ids)==3:
+                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                            image1, image2, image1
+                        elif len(self.opt.frame_ids)==2:
+                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)] = image1, image2
+                            
                         if opt.model_name=="PWC_from_img":
                             out_dict = self.ddp_model(image1, image2)
                             flow_1_2 = out_dict['level0'][0]
@@ -1027,9 +1029,9 @@ class DDP_Trainer():
             epe_noc = np.mean(epe_list_noc)
             f1_noc = 100 * np.mean(out_list_noc)
             
-            print("\n Validation KITTI epe_all, f1_all\n: %f, %f" % (epe_all, f1_all))
-            print("\n Validation KITTI epe_occ, f1_occ\n: %f, %f" % (epe_occ, f1_occ))
-            print("\n Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
+            print("\n Validation KITTI epe_all, f1_all: %f, %f" % (epe_all, f1_all))
+            print(" Validation KITTI epe_occ, f1_occ: %f, %f" % (epe_occ, f1_occ))
+            print(" Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
             
             writer = self.writers['val']
             writer.add_scalar('kitti_epe', epe_all, self.step)
@@ -1039,7 +1041,6 @@ class DDP_Trainer():
             writer.add_scalar('kitti_epe_noc', epe_noc, self.step)
             writer.add_scalar('kitti_f1_noc', f1_noc, self.step)
             
-
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
         This isn't particularly accurate as it averages over the entire batch,
