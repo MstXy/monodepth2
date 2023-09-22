@@ -35,6 +35,8 @@ from networks.mobilevit.build_mobileViTv3 import MobileViT
 from networks.mobilevit.misc.averaging_utils import EMA
 from networks.mobilevit.utils.checkpoint_utils import copy_weights
 
+from networks.efficientvit.build_efficientvit import EfficientViT
+
 
 from IPython import embed
 
@@ -155,6 +157,10 @@ class Trainer:
                 )
             else:
                 self.model_ema = None
+        elif self.opt.encoder == "efficientvit":
+            self.models["encoder"] = EfficientViT(model_name="b1")
+            self.opt.mobile_backbone = "effvit-b1"
+            self.use_ema = False
         else:
             self.opt.mobile_backbone = None
             # dilated ResNet?
@@ -479,7 +485,7 @@ class Trainer:
             losses["loss"].backward()
             self.model_optimizer.step()
 
-            if self.model_ema is not None:
+            if self.use_ema:
                 self.model_ema.update_parameters(self.models["encoder"])
 
             duration = time.time() - before_op_time

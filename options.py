@@ -93,9 +93,10 @@ class MonodepthOptions:
         self.parser.add_argument("--encoder",
                                  type=str,
                                  help="alternative encoder choices",
-                                 default="mobilevitv3_s",
+                                 default="efficientvit",
                                  choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", 
-                                          "mobilevitv3_xs","mobilevitv3_s"
+                                          "mobilevitv3_xs","mobilevitv3_s",
+                                          "efficientvit",
                                           "None"])
         # -----------------------------
       #   # backbone EMA -----------
