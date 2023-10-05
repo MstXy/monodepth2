@@ -68,7 +68,7 @@ class MobileViT(nn.Module):
         self.features.append(self.encoder.layer_5(self.features[-1])) # B, 160, 6, 20
 
         # x = self.encoder.conv_1x1_exp(x)
-        # print(sum(p.numel() for p in self.encoder.conv_1x1_exp.parameters() if p.requires_grad))
+        print(sum(p.numel() for p in self.encoder.conv_1x1_exp.parameters() if p.requires_grad))
         # 103680
 
         return self.features
