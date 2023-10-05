@@ -13,16 +13,47 @@ import copy
 from PIL import Image  # using pillow-simd for increased speed
 
 import torch
+import torchvision.transforms.functional as F # for aug
 import torch.utils.data as data
 from torchvision import transforms
 
 
+# def pil_loader(path):
+#     # open path as file to avoid ResourceWarning
+#     # (https://github.com/python-pillow/Pillow/issues/835)
+#     with open(path, 'rb') as f:
+#         with Image.open(f) as img:
+#             return img.convert('RGB')
+
 def pil_loader(path):
-    # open path as file to avoid ResourceWarning
-    # (https://github.com/python-pillow/Pillow/issues/835)
-    with open(path, 'rb') as f:
-        with Image.open(f) as img:
-            return img.convert('RGB')
+    return Image.open(path).convert('RGB')
+
+class ColorJitterAug(torch.nn.Module):
+    def __init__(self, color_aug_params) -> None:
+        super().__init__()
+        self.color_aug_params = color_aug_params
+
+    def forward(self, img):
+        """
+        Args:
+            img (PIL Image or Tensor): Input image.
+
+        Returns:
+            PIL Image or Tensor: Color jittered image.
+        """
+        fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor = self.color_aug_params
+
+        for fn_id in fn_idx:
+            if fn_id == 0 and brightness_factor is not None:
+                img = F.adjust_brightness(img, brightness_factor)
+            elif fn_id == 1 and contrast_factor is not None:
+                img = F.adjust_contrast(img, contrast_factor)
+            elif fn_id == 2 and saturation_factor is not None:
+                img = F.adjust_saturation(img, saturation_factor)
+            elif fn_id == 3 and hue_factor is not None:
+                img = F.adjust_hue(img, hue_factor)
+
+        return img
 
 
 class MonoDataset(data.Dataset):
@@ -172,17 +203,20 @@ class MonoDataset(data.Dataset):
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
-        if do_color_aug:
-            color_aug = transforms.ColorJitter(
-                self.brightness, self.contrast, self.saturation, self.hue)
-        else:
-            color_aug = lambda x: x
+        # if do_color_aug:
+        #     color_aug_params = transforms.ColorJitter.get_params(
+        #         self.brightness, self.contrast, self.saturation, self.hue)
+        #     color_aug = ColorJitterAug(color_aug_params)
+        # else:
+        #     color_aug = (lambda x: x)
 
-        self.preprocess(inputs, color_aug)
+        # self.preprocess(inputs, color_aug)
 
-        for i in self.frame_idxs:
-            del inputs[("color", i, -1)]
-            del inputs[("color_aug", i, -1)]
+        for k in list(inputs):
+            if "color" in k:
+                n, im, i = k
+                inputs[(n, im, 0)] = self.to_tensor(self.resize[0](inputs[(n, im, -1)]))
+                del inputs[("color", im, -1)]
 
         if self.load_depth:
             depth_gt = self.get_depth(folder, frame_index, side, do_flip)

@@ -13,16 +13,22 @@ import numpy as np
 
 class MobileViT(nn.Module):
 
-    def __init__(self, parser, pretrained=True) -> None:
+    def __init__(self, parser, model_name="mobilevitv3_s", pretrained=True, num_input_images=1) -> None:
         super(MobileViT, self).__init__()
         
 
         group = parser.add_argument_group(title="MobileViT arguments", description="MobileViT arguments")
 
-        CONFIG_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/config/classification/mobilevitv3_x_small_oneserver.yaml"
-        PRETRAIN_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/weights/MobileViTv3-v1/results_classification/mobilevitv3_XS_e300_7671/checkpoint_ema_best.pt"
+        if model_name == "mobilevitv3_s":
+            CONFIG_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/config/classification/mobilevitv3_small_oneserver.yaml"
+            PRETRAIN_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/weights/MobileViTv3-v1/results_classification/mobilevitv3_S_e300_7930/checkpoint_ema_best.pt"
+            self.num_ch_enc = np.array([32,64,128,256,320])
+        elif model_name == "mobilevitv3_xs":
+            CONFIG_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/config/classification/mobilevitv3_x_small_oneserver.yaml"
+            PRETRAIN_PATH = "/mnt/km-nfs/ns100002-share/zcy-exp/monodepth2/networks/mobilevit/weights/MobileViTv3-v1/results_classification/mobilevitv3_XS_e300_7671/checkpoint_ema_best.pt"
+            self.num_ch_enc = np.array([32,48,96,160,160])
 
-        group.add_argument('--common.config-file', type=str, default=CONFIG_PATH) #TODO: default v3_xs
+        group.add_argument('--common.config-file', type=str, default=CONFIG_PATH)
 
         # model related arguments
         group = arguments_nn_layers(parser=group)
@@ -32,13 +38,21 @@ class MobileViT(nn.Module):
         # no distributed
         group.add_argument('--ddp.rank', type=int, default=0)
         opts = parser.parse_args()
-        opts = load_config_file(opts)
+        self.opts = load_config_file(opts)
+
+        # num_input_image:
+        if num_input_images == 2: setattr(opts, "model.classification.num_input", 2)
 
         # pretrained
         if pretrained: setattr(opts, "model.classification.pretrained", PRETRAIN_PATH)
 
         self.encoder = build_classification_model(opts=opts)
-        self.num_ch_enc = np.array([32,48,96,160,160])
+
+
+        # self.use_ema = getattr(self.opts, "ema.enable", False)
+        # self.ema_momentum = getattr(self.opts, "ema.momentum", 0.0001)
+        self.use_ema = False
+
 
     def forward(self, input_image):
         self.features = []
@@ -63,7 +77,7 @@ class MobileViT(nn.Module):
 if __name__ == "__main__":
 
     # model = MobileNetV3(model_type="small")
-    model = MobileViT()
+    model = MobileViT(model_name="mobilevitv3_s")
     x = torch.randn((1,3,192,640))
     output = model(x)
     print("Finished")

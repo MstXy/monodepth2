@@ -48,6 +48,10 @@ class DepthDecoder(nn.Module):
             self.num_ch_dec = np.array([8,12,16,48,160])
         elif mobile_backbone == "mbvitv3_xs":
             self.num_ch_dec = np.array([16,24,48,80,80])
+        elif mobile_backbone == "mbvitv3_s":
+            self.num_ch_dec = np.array([16,32,64,128,160])
+        elif mobile_backbone == "effvit-b1":
+            self.num_ch_dec = np.array([16,32,64,128,160])
         else:
             self.num_ch_dec = np.array([16, 32, 64, 128, 256])
 
@@ -77,6 +81,8 @@ class DepthDecoder(nn.Module):
         # decoder
         self.convs = OrderedDict()
 
+        self.do = nn.Dropout(0.5)
+
         if self.cv_reproj:
             self.backproject_depth = backproject_depth
             self.project_3d = project_3d
@@ -105,6 +111,7 @@ class DepthDecoder(nn.Module):
             if self.updown and i in [4,3,2]:
                 self.convs[("down_conv", i)] = Conv3x3(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
                 # self.convs[("down_conv", i)] = SeparableConv(self.num_ch_enc[i-2], self.num_ch_dec[i-1]//2, stride=2)
+                # self.convs[("down_conv", i)] = SeparableConv(self.num_ch_enc[i-2], 64, stride=2)
 
             # depth_att
             if self.depth_att:
@@ -113,6 +120,7 @@ class DepthDecoder(nn.Module):
                     num_ch_in += self.num_ch_enc[i - 1]
                     if self.updown and i in [4,3,2]:
                         num_ch_in += self.num_ch_dec[i - 1]//2
+                        # num_ch_in += 64
                     self.convs[("att", i)] = ChannelAttention(num_ch_in)
                 # self.convs[("att", i)] = SpatialAttention()
                 # self.convs[("att", i)] = CS_Block(num_ch_in)
@@ -168,6 +176,7 @@ class DepthDecoder(nn.Module):
             #     num_ch_in += 1
             if self.updown and i in [4,3,2]:
                 num_ch_in += self.num_ch_dec[i - 1]//2
+                # num_ch_in += 64
             num_ch_out = self.num_ch_dec[i]
             self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 
@@ -198,7 +207,12 @@ class DepthDecoder(nn.Module):
         # decoder
         x = input_features[-1]
         for i in range(4, -1, -1):
+            ## apply dropout:
+            # if i in [3,4]:
+            #     x = self.convs[("upconv", i, 0)](self.do(x))
+            # else:
             x = self.convs[("upconv", i, 0)](x)
+                
             if self.drn:
                 x = [upsample(x)] if i not in [3, 4] else [x]
             else:

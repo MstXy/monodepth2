@@ -93,16 +93,23 @@ class MonodepthOptions:
         self.parser.add_argument("--encoder",
                                  type=str,
                                  help="alternative encoder choices",
-                                 default="mobilevitv3_xs",
+                                 default="efficientnet",
                                  choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", 
-                                          "mobilevitv3_xs",
+                                          "mobilevitv3_xs","mobilevitv3_s",
+                                          "efficientvit", "efficientnet"
                                           "None"])
         # -----------------------------
+      #   # backbone EMA -----------
+      #   self.parser.add_argument("--ema",
+      #                            type=bool,
+      #                            help="EMA encoder weight update",
+      #                            default=True)
+      #   # -----------------------------
         # decoder switch -----------
         self.parser.add_argument("--decoder",
                                  type=str,
                                  help="alternative decoder choices",
-                                 default="default",
+                                 default="efficient",
                                  choices=["default", "efficient"])
         # -----------------------------
         # heads for transformer -----------
@@ -115,11 +122,11 @@ class MonodepthOptions:
         self.parser.add_argument('--updown',
                                  type=bool,
                                  help="use down sample in depth decoder",
-                                 default=True)
+                                 default=False)
         self.parser.add_argument('--depth_att',
                                  type=bool,
                                  help="use attention in depth decoder",
-                                 default=True)
+                                 default=False)
         self.parser.add_argument('--depth_cv',
                                  type=bool,
                                  help="use attention in depth decoder",
@@ -202,11 +209,11 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20) # 20
+                                 default=40) # 20
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=15)
+                                 default=30)
 
         # ABLATION options
         self.parser.add_argument("--v1_multiscale",
@@ -239,7 +246,7 @@ class MonodepthOptions:
                                  help="normal or shared",
                                  default="separate_resnet",
                                  # default="shared",
-                                 choices=["posecnn", "separate_resnet", "shared"])
+                                 choices=["posecnn", "separate_resnet", "shared", "separate_backbone"])
 
         # SYSTEM options
         self.parser.add_argument("--no_cuda",

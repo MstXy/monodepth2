@@ -8,12 +8,15 @@ from __future__ import absolute_import, division, print_function
 
 import numpy as np
 import time
+import copy
 
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
+import torchvision.transforms as transforms
+
 
 import cupy as cp
 
@@ -29,11 +32,19 @@ from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
 from networks.mobilevit.build_mobileViTv3 import MobileViT
+from networks.mobilevit.misc.averaging_utils import EMA
+from networks.mobilevit.utils.checkpoint_utils import copy_weights
+
+from networks.efficientvit.build_efficientvit import EfficientViT
+
+
 from IPython import embed
 
 
 class Trainer:
     def __init__(self, options, parser=None):
+        alt_parser = copy.deepcopy(parser)
+
         self.opt = options
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
 
@@ -44,8 +55,32 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.DEVICE_NUM = 5 # change for # of GPU
+        self.DEVICE_NUM = 4 # change for # of GPU
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda:{}".format(self.DEVICE_NUM))
+
+        ##<<<<<<<< for input augmentation and resize >>>>>>>>>>>>
+        self.num_scales = len(self.opt.scales)
+        self.to_tensor = transforms.ToTensor()
+        # We need to specify augmentations differently in newer versions of torchvision.
+        # We first try the newer tuple version; if this fails we fall back to scalars
+        try:
+            self.brightness = (0.8, 1.2)
+            self.contrast = (0.8, 1.2)
+            self.saturation = (0.8, 1.2)
+            self.hue = (-0.1, 0.1)
+            transforms.ColorJitter.get_params(
+                self.brightness, self.contrast, self.saturation, self.hue)
+        except TypeError:
+            self.brightness = 0.2
+            self.contrast = 0.2
+            self.saturation = 0.2
+            self.hue = 0.1
+        self.resize = {}
+        for i in range(self.num_scales):
+            s = 2 ** i
+            self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
+                                               # interpolation=Image.ANTIALIAS)
+        ##>>>>>>>>>>>>> for input augmentation and resize <<<<<<<<<<<<<<<<
 
         self.num_scales = len(self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
@@ -96,8 +131,40 @@ class Trainer:
             self.opt.mobile_backbone = "vatt2"
         elif self.opt.encoder == "mobilevitv3_xs":
             print("using MobileViTv3_XS as backbone")
-            self.models["encoder"] = MobileViT(parser)
+            self.models["encoder"] = MobileViT(parser, self.opt.encoder)
             self.opt.mobile_backbone = "mbvitv3_xs"
+            self.use_ema = self.models["encoder"].use_ema
+            if self.use_ema:
+                print("using EMA")
+                self.model_ema = EMA(
+                    model=self.models["encoder"],
+                    ema_momentum=self.models["encoder"].ema_momentum,
+                    device=self.device
+                )
+            else:
+                self.model_ema = None
+        elif self.opt.encoder ==  "mobilevitv3_s":
+            print("using MobileViTv3_S as backbone")
+            self.models["encoder"] = MobileViT(parser, self.opt.encoder)
+            self.opt.mobile_backbone = "mbvitv3_s"
+            self.use_ema = self.models["encoder"].use_ema
+            if self.use_ema:
+                print("using EMA")
+                self.model_ema = EMA(
+                    model=self.models["encoder"],
+                    ema_momentum=self.models["encoder"].ema_momentum,
+                    device=self.device
+                )
+            else:
+                self.model_ema = None
+        elif self.opt.encoder == "efficientvit":
+            self.models["encoder"] = EfficientViT(model_name="b1")
+            self.opt.mobile_backbone = "effvit-b1"
+            self.use_ema = False
+        elif self.opt.encoder == "efficientnet":
+            self.models["encoder"] = networks.EfficientEncoder()
+            self.opt.mobile_backbone = "eff-b0"
+            self.use_ema = False
         else:
             self.opt.mobile_backbone = None
             # dilated ResNet?
@@ -187,6 +254,16 @@ class Trainer:
                     self.opt.num_layers,
                     self.opt.weights_init == "pretrained",
                     num_input_images=self.num_pose_frames)
+
+                self.models["pose_encoder"].to(self.device)
+                self.parameters_to_train += list(self.models["pose_encoder"].parameters())
+
+                self.models["pose"] = networks.PoseDecoder(
+                    self.models["pose_encoder"].num_ch_enc,
+                    num_input_features=1,
+                    num_frames_to_predict_for=2)
+            elif self.opt.pose_model_type == "separate_backbone":
+                self.models["pose_encoder"] = MobileViT(alt_parser, num_input_images=self.num_pose_frames)
 
                 self.models["pose_encoder"].to(self.device)
                 self.parameters_to_train += list(self.models["pose_encoder"].parameters())
@@ -369,6 +446,30 @@ class Trainer:
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
+    
+    def preprocess(self, inputs):
+        color_aug = transforms.ColorJitter(
+            self.brightness, self.contrast, self.saturation, self.hue)
+        """Resize colour images to the required scales and augment if required
+
+                We create the color_aug object in advance and apply the same augmentation to all
+                images in this item. This ensures that all images input to the pose network receive the
+                same augmentation.
+                """
+
+        for k in list(inputs):
+            frame = inputs[k]
+            if "color" in k:
+                n, im, _ = k
+                for i in range(1, self.num_scales):
+                    inputs[(n, im, i)] = self.resize[i](inputs[(n, im, i - 1)])
+
+        for k in list(inputs):
+            f = inputs[k]
+            if "color" in k:
+                n, im, i = k
+                # inputs[(n, im, i)] = (self.to_tensor(f))
+                inputs[(n + "_aug", im, i)] = color_aug(f)
 
     def run_epoch(self):
         """Run a single epoch of training and validation
@@ -388,6 +489,9 @@ class Trainer:
             losses["loss"].backward()
             self.model_optimizer.step()
 
+            if self.use_ema:
+                self.model_ema.update_parameters(self.models["encoder"])
+
             duration = time.time() - before_op_time
 
             # log less frequently after the first 2000 steps to save time & disk space
@@ -406,12 +510,15 @@ class Trainer:
             self.step += 1
         
         self.model_lr_scheduler.step()
+        # self.models["encoder"] = copy_weights(model_tgt=self.models["encoder"], model_src=self.model_ema)
 
     def process_batch(self, inputs):
         """Pass a minibatch through the network and generate images and losses
         """
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
+
+        self.preprocess(inputs)
 
         if self.opt.pose_model_type == "shared":
             # If we are using a shared encoder for both depth and pose (as advocated
@@ -531,7 +638,7 @@ class Trainer:
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
-                    if self.opt.pose_model_type == "separate_resnet":
+                    if self.opt.pose_model_type == "separate_resnet" or self.opt.pose_model_type == "separate_backbone":
                         pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
                     elif self.opt.pose_model_type == "posecnn":
                         pose_inputs = torch.cat(pose_inputs, 1)
@@ -575,11 +682,11 @@ class Trainer:
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
-            if self.opt.pose_model_type in ["separate_resnet", "posecnn"]:
+            if self.opt.pose_model_type in ["separate_resnet", "posecnn", "separate_backbone"]:
                 pose_inputs = torch.cat(
                     [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if not isinstance(i, str)], 1)
 
-                if self.opt.pose_model_type == "separate_resnet":
+                if self.opt.pose_model_type == "separate_resnet" or self.opt.pose_model_type == "separate_backbone":
                     pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
             elif self.opt.pose_model_type == "shared":
@@ -874,6 +981,9 @@ class Trainer:
                     writer.add_image(
                         "color_{}_{}/{}".format(frame_id, s, j),
                         inputs[("color", frame_id, s)][j].data, self.step)
+                    writer.add_image(
+                        "color_aug_{}_{}/{}".format(frame_id, s, j),
+                        inputs[("color_aug", frame_id, s)][j].data, self.step)
                     if s == 0 and frame_id != 0:
                         writer.add_image(
                             "color_pred_{}_{}/{}".format(frame_id, s, j),
@@ -916,6 +1026,9 @@ class Trainer:
         save_folder = os.path.join(self.log_path, "models", "weights_{}".format(self.epoch))
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
+        
+        if self.use_ema:
+            self.models["encoder"] = copy_weights(model_tgt=self.models["encoder"], model_src=self.model_ema)
 
         for model_name, model in self.models.items():
             save_path = os.path.join(save_folder, "{}.pth".format(model_name))

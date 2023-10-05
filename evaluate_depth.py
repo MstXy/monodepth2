@@ -20,6 +20,7 @@ from networks.feature_refine import APNB, AFNB, ASPP, PPM, SelfAttention
 from networks.dilated_resnet import dilated_resnet18
 from networks.mobilenet_encoder import MobileNetV3, MobileNetV2, MobileNetAtt, MobileNetAtt2
 from networks.mobilevit.build_mobileViTv3 import MobileViT
+from networks.efficientvit.build_efficientvit import EfficientViT
 
 from layers import BackprojectDepth, Project3D, transformation_from_parameters
 
@@ -190,10 +191,20 @@ def evaluate(opt, parser):
                 encoder = MobileNetAtt2(opt.nhead)
                 opt.mobile_backbone = "vatt2"
             elif opt.load_weights_folder.split("/")[-3].split("_")[1] == "vitv3":
-                print("using mobileViT v3 xs")
+                print("using mobileViT v3 s") # mod from xs
                 encoder = MobileViT(parser, pretrained=False)
                 encoder_test =  copy.deepcopy(encoder)
-                opt.mobile_backbone = "mbvitv3_xs"
+                opt.mobile_backbone = "mbvitv3_s"
+        elif opt.load_weights_folder.split("/")[-3].split("_")[0] == "efficientvit":
+            print("using efficient ViT")
+            encoder = EfficientViT(model_name="b1")
+            encoder_test =  copy.deepcopy(encoder)
+            opt.mobile_backbone = "effvit-b1"
+        elif opt.load_weights_folder.split("/")[-3].split("_")[0] == "efficientvit":
+            print("using efficient Net b0")
+            encoder = networks.EfficientEncoder()()
+            encoder_test =  copy.deepcopy(encoder)
+            opt.mobile_backbone = "eff-b0"
         else:
             opt.mobile_backbone = None
             if opt.load_weights_folder.split("/")[-3].split("_")[0] == "drn":
@@ -204,13 +215,22 @@ def evaluate(opt, parser):
                 opt.drn = False
                 encoder = networks.ResnetEncoder(opt.num_layers, False)
 
-        # change config to pos_2
-        # if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
-        if opt.load_weights_folder.split("/")[-3].split("_")[2] == "att":
-            print("using depth attention")
-            opt.depth_att = True
-            opt.updown = False
-        elif opt.load_weights_folder.split("/")[-3].split("_")[2] == "att2":
+        ## change config to pos_2 for mobilevit
+        ## if opt.load_weights_folder.split("/")[-3].split("_")[0] == "depatt":
+        # if opt.load_weights_folder.split("/")[-3].split("_")[2] == "att":
+        #     print("using depth attention")
+        #     opt.depth_att = True
+        #     opt.updown = False
+        # elif opt.load_weights_folder.split("/")[-3].split("_")[2] == "att2":
+        #     print("using depth attention + down sample")
+        #     opt.depth_att = True
+        #     opt.updown = True
+        # else:
+        #     opt.depth_att = False
+        #     opt.updown = False
+
+        # change config to pos_1 for efficientvit
+        if opt.load_weights_folder.split("/")[-3].split("_")[1] == "att2":
             print("using depth attention + down sample")
             opt.depth_att = True
             opt.updown = True
@@ -334,7 +354,7 @@ def evaluate(opt, parser):
             project_3d[scale].cuda(device="cuda:{}".format(DEVICE_NUM))
 
         # decoder alternatives:
-        if opt.load_weights_folder.split("/")[-3].split("_")[2] == "eff":
+        if opt.load_weights_folder.split("/")[-3].split("_")[1] == "eff": # TODO: change to index 2 for mobilevit
             print("using efficient decoder")
             opt.decoder = "efficient"
             depth_decoder = networks.EfficientDecoder(encoder.num_ch_enc)
@@ -592,4 +612,9 @@ if __name__ == "__main__":
     if DEBUG_FLAG:
         opts.eval_mono = True
         opts.load_weights_folder =  "~/tmp/repcv_c/models/weights_14"
-    evaluate(opts, options.parser)
+    
+    weights_folder = "/mnt/km-nfs/ns100002-share/zcy-exp/tmp/efficientvit_eff_d128/models/weights_"
+
+    for i in range(39, 30, -1):
+        opts.load_weights_folder = weights_folder + str(i)
+        evaluate(opts, options.parser)
