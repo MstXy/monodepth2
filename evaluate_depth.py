@@ -200,9 +200,9 @@ def evaluate(opt, parser):
             encoder = EfficientViT(model_name="b1")
             encoder_test =  copy.deepcopy(encoder)
             opt.mobile_backbone = "effvit-b1"
-        elif opt.load_weights_folder.split("/")[-3].split("_")[0] == "efficientvit":
+        elif opt.load_weights_folder.split("/")[-3].split("_")[0] == "efficientnet":
             print("using efficient Net b0")
-            encoder = networks.EfficientEncoder()()
+            encoder = networks.EfficientEncoder()
             encoder_test =  copy.deepcopy(encoder)
             opt.mobile_backbone = "eff-b0"
         else:
@@ -613,7 +613,7 @@ if __name__ == "__main__":
         opts.eval_mono = True
         opts.load_weights_folder =  "~/tmp/repcv_c/models/weights_14"
     
-    weights_folder = "/mnt/km-nfs/ns100002-share/zcy-exp/tmp/efficientvit_eff_d128/models/weights_"
+    weights_folder = "/mnt/km-nfs/ns100002-share/zcy-exp/tmp/efficientnet_eff/models/weights_"
 
     for i in range(39, 30, -1):
         opts.load_weights_folder = weights_folder + str(i)
