@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
 
+from easydict import EasyDict 
 
 import cupy as cp
 
@@ -37,6 +38,7 @@ from networks.mobilevit.utils.checkpoint_utils import copy_weights
 
 from networks.efficientvit.build_efficientvit import EfficientViT
 
+from networks.ARFlow_losses.flow_loss import unFlowLoss
 
 from IPython import embed
 
@@ -95,6 +97,14 @@ class Trainer:
         
         if self.opt.full_stereo:
             self.opt.frame_ids += ["s_" + str(i) for i in self.opt.frame_ids]
+
+        # frame_id and idx_pair_list
+        if len(self.opt.frame_ids) == 3:
+            self.idx_pair_list = [(-1, 0)] # TODO: was [(-1, 0), (0, 1)]
+        elif len(self.opt.frame_ids) == 2:
+            self.idx_pair_list = [(-1, 0)]
+        else:
+            raise NotImplementedError 
 
         # move utils up
         self.backproject_depth = {}
@@ -290,6 +300,8 @@ class Trainer:
             #     self.models["att_pose"] = nn.MultiheadAttention(embed_dim=128, num_heads=4, dropout=0.5, device=self.device)
             #     self.parameters_to_train += list(self.models["att_pose"].parameters())
         
+        self.use_flow = self.opt.optical_flow in ["flownet","PWCLiteWithResNet"]
+        
         if self.opt.optical_flow in ["flownet",] or self.opt.depth_cv:
             # set cupy device
             cp.cuda.Device(self.DEVICE_NUM).use()
@@ -325,26 +337,12 @@ class Trainer:
             self.models["corr"].to(self.device)
             self.parameters_to_train += list(self.models["corr"].parameters())
             
-        if self.opt.optical_flow in ["flownet",]:
-            self.models["flow"] = networks.FlowNetCDecoder(in_channels=dict(
-                    level6=1024, level5=1026, level4=770, level3=386, level2=194),
-                out_channels=dict(level6=512, level5=256, level4=128, level3=64),
-                deconv_bias=True,
-                pred_bias=True,
-                upsample_bias=True,
-                norm_cfg=None,
-                act_cfg=dict(type='LeakyReLU', negative_slope=0.1),
-                init_cfg=[
-                    dict(
-                        type='Kaiming',
-                        layer=['Conv2d', 'ConvTranspose2d'],
-                        a=0.1,
-                        mode='fan_in',
-                        nonlinearity='leaky_relu',
-                        bias=0),
-                    dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
-                ])
-            
+        if self.use_flow:
+            with open(os.path.join(os.path.dirname(os.path.realpath(__file__)),'networks/ARFlow_losses/kitti_raw.json')) as f:
+                self.flow_cfg = EasyDict(json.load(f))
+            self.models["flow"] = networks.PWCLiteWithResNet(self.flow_cfg.model)
+            self.arflow_loss = unFlowLoss(cfg=self.flow_cfg.loss)
+
             self.models["flow"].to(self.device)
             self.parameters_to_train += list(self.models["flow"].parameters())
 
@@ -443,6 +441,16 @@ class Trainer:
         self.step = 0
         self.start_time = time.time()
         for self.epoch in range(self.opt.num_epochs):
+            
+            # self.eval_depth_flow()
+            if 'stage1' in self.flow_cfg.train:
+                if self.epoch >= self.flow_cfg.train.stage1.epoch:
+                    self.arflow_loss.cfg.update(self.flow_cfg.train.stage1.loss)
+                    print('\n ==========update loss function to stage1 loss========== \n')
+                    
+            if self.epoch > self.opt.occ_start_epoch:
+                self.opt.flow_occ_check = True
+
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
                 self.save_model()
@@ -596,6 +604,11 @@ class Trainer:
                 outputs = self.predict_poses(inputs, features)
                 outputs.update(self.models["depth"](features[0], inputs=inputs, outputs=outputs, adjacent_features={-1:features[-1],1:features[1]})) # only predict depth for current frame (monocular)
             
+            elif self.use_flow:
+                # if use flow branch:
+                imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] # all images: ([i-1, i, i+1])
+                features = [self.models["encoder"](img) for img in imgs]
+                outputs = self.models["depth"](features[0]) # depth only takes in current frame
             else:
                 # Otherwise, we only feed the image with frame_id 0 through the depth encoder
                 features = self.models["encoder"](inputs["color_aug", 0, 0])
@@ -608,8 +621,8 @@ class Trainer:
         if not self.opt.cv_reproj and self.use_pose_net: ## IF cv_reproj, apply before depth decoder 
             outputs.update(self.predict_poses(inputs, features))
 
-        if self.opt.optical_flow in ["flownet",]:
-            outputs.update(self.predict_flow(features))
+        if self.use_flow:
+            outputs.update(self.predict_flow(imgs, features))
 
         self.generate_images_pred(inputs, outputs)
         losses = self.compute_losses(inputs, outputs)
@@ -704,30 +717,10 @@ class Trainer:
         return outputs
     
 
-    def predict_flow(self, features):
+    def predict_flow(self, imgs, features):
         """Predict flow between ??.
         """
-        
-        # TODO: multi image
-
-        outputs = {}
-
-        # print(type(features[-1])) # Python list
-        # print(len(features[-1])) # 5
-        
-        # use D=256, i.e., level=3
-        corr_prev_curr = self.models["corr"](features[-1][3], features[0][3]) # mono view, for now
-        corr_curr_next = self.models["corr"](features[0][3], features[1][3])
-
-        mod_prev = {"level"+str(i) : features[-1][i] for i in range(1, len(features[-1]))}
-        mod_curr = {"level"+str(i) : features[0][i] for i in range(1, len(features[0]))}
-
-        flow_prev_curr = self.models["flow"](mod_prev, corr_prev_curr)
-        flow_curr_next = self.models["flow"](mod_curr, corr_curr_next)
-        
-        outputs["flow"] = [flow_prev_curr, flow_curr_next]
-
-        return outputs
+        return self.models["flow"](imgs, features)
 
 
     def val(self):
@@ -914,7 +907,37 @@ class Trainer:
                 losses["loss/combined"] = to_optimise.mean()
 
         total_loss /= self.num_scales
-        losses["loss"] = total_loss
+
+        # =============== FLOW LOSS =================
+        flow_loss = 0
+        if self.use_flow:
+            pyramid_flows = []
+            for idx_pair in self.idx_pair_list:
+                for scale in self.opt.scales:
+                    pyramid_flows.append(
+                        torch.cat(
+                        (outputs[('flow', idx_pair[0], idx_pair[1], scale)], outputs[('flow', idx_pair[1], idx_pair[0], scale)]), 
+                        dim=1)
+                        )
+                target = torch.cat((inputs['color_aug', idx_pair[0], 0], inputs['color_aug', idx_pair[1], 0]), dim=1)
+            
+            flow_loss, l_ph_pyramid, l_sm_pyramid, flow_mean, pyramid_occ_mask1, pyramid_occ_mask2, \
+                pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target)
+            
+            for scale in self.opt.scales:
+                losses['smo_loss_o1', scale] = l_sm_pyramid[scale]
+                losses['smo_loss_o2', scale] = l_sm_pyramid[scale]
+                losses['photo_loss_l1', scale] = l_ph_pyramid[scale]
+                losses['photo_loss_ssim', scale] = l_ph_pyramid[scale]
+                
+            for scale in self.opt.scales:
+                for idx_pair in self.idx_pair_list:
+                    outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = pyramid_im1_recons[scale]  # prev_img warped by curr_img and flow_prev_to_curr
+                    outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = pyramid_im2_recons[scale]   # curr_img warped by prev_img and flow_curr_to_prev
+                    outputs[('occ', idx_pair[0], idx_pair[1], scale)] = pyramid_occ_mask1[scale]
+                    outputs[('occ', idx_pair[1], idx_pair[0], scale)] = pyramid_occ_mask2[scale]
+        
+        losses["loss"] = total_loss + flow_loss * self.opt.flow_loss_weight
         return losses
 
     def compute_depth_losses(self, inputs, outputs, losses):

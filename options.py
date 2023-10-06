@@ -188,7 +188,28 @@ class MonodepthOptions:
         self.parser.add_argument("--optical_flow",
                                  type=str,
                                  help="optical flow model",
-                                 default="na") # TODO: change back to flownet
+                                 choices=["PWCLiteWithResNet", "flownet"],
+                                 default="PWCLiteWithResNet")
+        self.parser.add_argument("--flow_loss_weight",
+                                 type=float,
+                                 help="weight for flow loss",
+                                 default=1)
+        
+        self.parser.add_argument("--flow_occ_check",
+                                 default=False,
+                                 type=bool)
+
+        self.parser.add_argument("--occ_start_epoch",
+                                 type=int,
+                                 default=10)
+
+        self.parser.add_argument("--stop_occ_gradient",
+                                 type=bool,
+                                 default=True)
+
+        self.parser.add_argument("--norm_trans",
+                                 type=bool,
+                                 default=False)
         # ------------------------
 
         self.parser.add_argument("--frame_ids",
@@ -201,7 +222,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=8)
+                                 default=16)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",

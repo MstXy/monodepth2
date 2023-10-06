@@ -6,3 +6,4 @@ from .flownet_decoder import FlowNetCDecoder, FlowNetSDecoder
 from .corr_encoder import CorrEncoder
 from .efficient_decoder import EfficientDecoder
 from .efficient_encoder import EfficientEncoder
+from .pwclite_withResNet import PWCLiteWithResNet
