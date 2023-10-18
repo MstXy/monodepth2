@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# from utils import torch_warp as flow_warp
 from monodepth2.utils.utils import torch_warp as flow_warp
-# from utils.warp_utils import flow_warp
 # from .correlation_package.correlation import Correlation
 from .correlation_native import Correlation
-import monodepth2.networks as networks
+import monodepth2.networks
 
 def conv(in_planes, out_planes, kernel_size=3, stride=1, dilation=1, isReLU=True):
     if isReLU:
@@ -129,19 +129,20 @@ class ContextNetwork(nn.Module):
 
 
 class PWCLiteWithResNet(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self,):
         super(PWCLiteWithResNet, self).__init__()
         self.search_range = 4
-        self.num_chs = [3, 16, 32, 64, 96, 128, 192]
+        # self.num_chs = [3, 16, 32, 64, 96, 128, 192]
         self.output_level = 4
         self.num_levels = 7
         self.leakyRELU = nn.LeakyReLU(0.1, inplace=True)
 
-        self.feature_pyramid_extractor = FeatureExtractor(self.num_chs)
+        # self.feature_pyramid_extractor = FeatureExtractor(self.num_chs)
+        self.last_layer = conv(320, 320, kernel_size=3, stride=2)
 
-        self.upsample = cfg.upsample
-        self.n_frames = cfg.n_frames
-        self.reduce_dense = cfg.reduce_dense
+        self.upsample = True  # cfg.upsample
+        self.n_frames = 2  # cfg.n_frames
+        self.reduce_dense = True  # cfg.reduce_dense
 
         self.corr = Correlation(pad_size=self.search_range, kernel_size=1,
                                 max_displacement=self.search_range, stride1=1,
@@ -157,12 +158,13 @@ class PWCLiteWithResNet(nn.Module):
 
         self.context_networks = ContextNetwork(
             (self.flow_estimators.feat_dim + 2) * (self.n_frames - 1))
-
-        self.conv_1x1 = nn.ModuleList([conv(192, 32, kernel_size=1, stride=1, dilation=1),
-                                       conv(128, 32, kernel_size=1, stride=1, dilation=1),
-                                       conv(96, 32, kernel_size=1, stride=1, dilation=1),
-                                       conv(64, 32, kernel_size=1, stride=1, dilation=1),
-                                       conv(32, 32, kernel_size=1, stride=1, dilation=1)])
+        
+        # efficientnet as encoder:
+        self.conv_1x1 = nn.ModuleList([conv(320, 32, kernel_size=1, stride=1, dilation=1),
+                                       conv(320, 32, kernel_size=1, stride=1, dilation=1),
+                                       conv(112, 32, kernel_size=1, stride=1, dilation=1),
+                                       conv(40, 32, kernel_size=1, stride=1, dilation=1),
+                                       conv(24, 32, kernel_size=1, stride=1, dilation=1)])
 
     def num_parameters(self):
         return sum(
@@ -277,23 +279,49 @@ class PWCLiteWithResNet(nn.Module):
         flows_12 = [flo[:, 2:] for flo in flows[::-1]]
         return flows_10, flows_12
 
-    def forward(self, input_dict, with_bk=True):
-        img1, img2 = input_dict[('color_aug', -1, 0)], input_dict[('color_aug', 0, 0)]
-        x = torch.cat([img1, img2], dim=1)
+    # def forward(self, input_dict, with_bk=True):
+        # img1, img2 = input_dict[('color_aug', -1, 0)], input_dict[('color_aug', 0, 0)]
+        # x = torch.cat([img1, img2], dim=1)
         
-        n_frames = x.size(1) / 3
+        # n_frames = x.size(1) / 3
 
-        imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
-        x = [self.feature_pyramid_extractor(img) + [img] for img in imgs]
+        # imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
+        # x = [self.feature_pyramid_extractor(img) + [img] for img in imgs]
+
+    def forward(self, imgs, features, with_bk=True):
+        # features: [0, -1, 1]
+        outdict = {}
+        x = []
+        for i, img in enumerate(imgs):
+            tmp_feats = features[i]
+            tmp_feats.append(self.last_layer(tmp_feats[-1]))
+            x.append(tmp_feats[::-1] + [img])
+
+        n_frames = len(imgs)
 
         res_dict = {}
         if n_frames == 2:
             res_dict['flows_fw'] = self.forward_2_frames(x[0], x[1])
             if with_bk:
                 res_dict['flows_bw'] = self.forward_2_frames(x[1], x[0])
+                for i in range(4):
+                    outdict[('flow', -1, 0, i)] =  res_dict['flows_fw'][i]
+                    outdict[('flow', 0, -1, i)] =  res_dict['flows_bw'][i]
         elif n_frames == 3:
-            flows_10, flows_12 = self.forward_3_frames(x[0], x[1], x[2])
-            res_dict['flows_fw'], res_dict['flows_bw'] = flows_12, flows_10
+            # flows_10, flows_12 = self.forward_3_frames(x[1], x[0], x[2]) # original is 0, 1, 2
+            # res_dict['flows_fw'], res_dict['flows_bw'] = flows_12, flows_10
+            
+
+            
+            for i in range(4):
+                outdict[('flow', -1, 0, i)] =  self.forward_2_frames(x[1], x[0])[i]
+                outdict[('flow', 0, -1, i)] =  self.forward_2_frames(x[0], x[1])[i]
+                outdict[('flow', 1, 0, i)] =  self.forward_2_frames(x[2], x[0])[i]
+                outdict[('flow', 0, 1, i)] =  self.forward_2_frames(x[0], x[2])[i]
+                
+            
+            
+            
         elif n_frames == 5:
             flows_10, flows_12 = self.forward_3_frames(x[0], x[1], x[2])
             flows_21, flows_23 = self.forward_3_frames(x[1], x[2], x[3])
@@ -304,10 +332,7 @@ class PWCLiteWithResNet(nn.Module):
         else:
             raise NotImplementedError
         
-        outdict = {}
-        for i in range(4):
-            outdict[('flow', -1, 0, i)] =  res_dict['flows_fw'][i]
-            outdict[('flow', 0, -1, i)] =  res_dict['flows_bw'][i]
+
+
         
         return outdict
-

@@ -127,6 +127,13 @@ class MonoFlowLoss():
             self.idx_pair_list = [(-1, 0)]
         else:
             raise NotImplementedError 
+        
+        
+        from easydict import EasyDict 
+        curr_file_path = os.path.dirname(os.path.realpath(__file__))
+        with open(os.path.join(curr_file_path,'ARFlow_losses/kitti_raw.json')) as f:
+            self.cfg = EasyDict(json.load(f))
+        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss)
 
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch, by depth info and flow info both.
@@ -238,38 +245,66 @@ class MonoFlowLoss():
         losses["flow_loss"] = 0
         total_loss = 0
         if self.opt.optical_flow:
-            # compute flow losses, warp img, calculate occ map
-            for scale in self.opt.scales:
-                tmp_smooth_o1_loss = 0
-                tmp_smooth_o2_loss = 0
-                tmp_photo_l1_loss = 0
-                tmp_photo_ssim_loss = 0
+            if self.opt.loss_type == 'arloss':
                 
                 for idx_pair in self.idx_pair_list:
-                    # prev(-1) to curr(0)
-                    flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
-                        img1=inputs[("color_aug", idx_pair[0], scale)],
-                        img2=inputs[("color_aug", idx_pair[1], scale)],
-                        flow_1_2=outputs[('flow', idx_pair[0], idx_pair[1], scale)],  # flow -1 to 0 (flow_prev_to_curr)
-                        flow_2_1=outputs[('flow', idx_pair[1], idx_pair[0], scale)],  # flow 0 to -1 (flow_curr_to_prev)
-                        name=idx_pair)
-                    outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
-                    outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
-                    outputs[('occ', idx_pair[0], idx_pair[1], scale)] = occ_1_2
-                    outputs[('occ', idx_pair[1], idx_pair[0], scale)] = occ_2_1
-
-                    tmp_smooth_o1_loss += flow_loss["smo_loss_o1"]
-                    tmp_smooth_o2_loss += flow_loss["smo_loss_o2"]
-                    tmp_photo_l1_loss += flow_loss["photo_loss_l1"]
-                    tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
+                    pyramid_flows = []
+                    for scale in self.opt.scales:
+                        pyramid_flows.append(
+                            torch.cat(
+                            (outputs[('flow', idx_pair[0], idx_pair[1], scale)], outputs[('flow', idx_pair[1], idx_pair[0], scale)]), 
+                            dim=1)
+                            )
+                    target = torch.cat((inputs['color_aug', idx_pair[0], 0], inputs['color_aug', idx_pair[1], 0]), dim=1)
                 
-                losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w[scale]
-                losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w[scale]
-                losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w[scale]
-                losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w[scale]
-                losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
-                                        losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
+                    flow_loss, l_ph_pyramid, l_sm_pyramid, flow_mean, pyramid_occ_mask1, pyramid_occ_mask2, \
+                        pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target)
+                    losses['flow_loss'] += flow_loss
+                
+                for scale in self.opt.scales:
+                    losses['smo_loss_o1', scale] = l_sm_pyramid[scale]
+                    losses['smo_loss_o2', scale] = l_sm_pyramid[scale]
+                    losses['photo_loss_l1', scale] = l_ph_pyramid[scale]
+                    losses['photo_loss_ssim', scale] = l_ph_pyramid[scale]
+                    
+                for scale in self.opt.scales:
+                    for idx_pair in self.idx_pair_list:
+                        outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = pyramid_im1_recons[scale]  # prev_img warped by curr_img and flow_prev_to_curr
+                        outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = pyramid_im2_recons[scale]   # curr_img warped by prev_img and flow_curr_to_prev
+                        outputs[('occ', idx_pair[0], idx_pair[1], scale)] = pyramid_occ_mask1[scale]
+                        outputs[('occ', idx_pair[1], idx_pair[0], scale)] = pyramid_occ_mask2[scale]
+            else:
+                # compute flow losses, warp img, calculate occ map
+                for scale in self.opt.scales:
+                    tmp_smooth_o1_loss = 0
+                    tmp_smooth_o2_loss = 0
+                    tmp_photo_l1_loss = 0
+                    tmp_photo_ssim_loss = 0
+                    
+                    for idx_pair in self.idx_pair_list:
+                        # prev(-1) to curr(0)
+                        flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1 = self._compute_flow_loss_paired(
+                            img1=inputs[("color_aug", idx_pair[0], scale)],
+                            img2=inputs[("color_aug", idx_pair[1], scale)],
+                            flow_1_2=outputs[('flow', idx_pair[0], idx_pair[1], scale)],  # flow -1 to 0 (flow_prev_to_curr)
+                            flow_2_1=outputs[('flow', idx_pair[1], idx_pair[0], scale)],  # flow 0 to -1 (flow_curr_to_prev)
+                            name=idx_pair)
+                        outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
+                        outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
+                        outputs[('occ', idx_pair[0], idx_pair[1], scale)] = occ_1_2
+                        outputs[('occ', idx_pair[1], idx_pair[0], scale)] = occ_2_1
 
+                        tmp_smooth_o1_loss += flow_loss["smo_loss_o1"]
+                        tmp_smooth_o2_loss += flow_loss["smo_loss_o2"]
+                        tmp_photo_l1_loss += flow_loss["photo_loss_l1"]
+                        tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
+                    
+                        losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w[scale]
+                        losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w[scale]
+                        losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w[scale]
+                        losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w[scale]
+                        losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
+                                                losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
             total_loss += losses["flow_loss"]
 
 
@@ -358,9 +393,9 @@ class MonoFlowLoss():
 
                 loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
                 total_loss += loss
-                losses["loss/scale_{}".format(scale)] = loss
+                losses["depth_loss/scale_{}".format(scale)] = loss
 
-        total_loss /= self.num_scales
+        # total_loss /= self.num_scales
         losses["loss"] = total_loss
         return losses
 
@@ -583,6 +618,7 @@ def prepare_dataloader(dataset):
 
 
 class DDP_Trainer():
+    
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
         self.gpu_id = gpu_id
@@ -655,7 +691,6 @@ class DDP_Trainer():
             self.model = PWCDecoder_from_img()
         elif self.opt.model_name =="PWC_lite_resnet":
             self.model = PWCLiteWithResNet(self.cfg.model).to('cuda:' + str(self.gpu_id))
-                
         else:
             raise NotImplementedError
         
@@ -698,7 +733,7 @@ class DDP_Trainer():
             self.save_opts()
             print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using: device cuda:", self.gpu_id)
-        
+
     def load_ddp_model(self):
         """Load model(s) from disk
         """
@@ -777,16 +812,16 @@ class DDP_Trainer():
             if self.opt.depth_branch:
                 for s in self.opt.scales:
                     for frame_id in self.opt.frame_ids:
-                        writer.add_image(
-                            "color_{}_{}/{}".format(frame_id, s, j),
-                            inputs[("color", frame_id, s)][j].data, self.step)
+                        # writer.add_image(
+                        #     "color/_{}_{}_BatchIdx{}".format(frame_id, s, j),
+                        #     inputs[("color", frame_id, s)][j].data, self.step)
                         if s == 0 and frame_id != 0:
                             writer.add_image(
-                                "color_pred_{}_{}/{}".format(frame_id, s, j),
+                                "DepthPose_color_pred_/{}_{}/_BI_{}".format(frame_id, s, j),
                                 outputs[("color", frame_id, s)][j].data, self.step)
 
                     writer.add_image(
-                        "disp_{}/{}".format(s, j),
+                        "disp/Scale{}_Idx{}".format(s, j),
                         mono_utils.normalize_image(outputs[("disp", s)][j]), self.step)
 
                     if self.opt.predictive_mask:
@@ -798,7 +833,7 @@ class DDP_Trainer():
 
                     elif not self.opt.disable_automasking:
                         writer.add_image(
-                            "automask_{}/{}".format(s, j),
+                            "automask/scale_{}_batchIdx_{}".format(s, j),
                             outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
 
     def save_opts(self):
@@ -836,6 +871,7 @@ class DDP_Trainer():
                 del inputs, outputs, losses
 
         resize_mode = True # pad mode or resize mode
+        
         if self.opt.optical_flow and not resize_mode:
             self.ddp_model.eval()
             out_list, epe_list = [], []
@@ -859,7 +895,7 @@ class DDP_Trainer():
                         image1_ori = self.norm_trans(image1_ori)
                         image2_ori = self.norm_trans(image2_ori)
                     
-                    padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64, mode='constant') #'constant', 'reflect', 'replicate' or 'circular'. Default: 'constant'
+                    padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64, pad_mode='constant')  #'constant', 'reflect', 'replicate' or 'circular'. Default: 'constant'
                     image1, image2 = padder.pad(image1_ori, image2_ori)
                     with torch.no_grad():
                         input_dict = {}
@@ -932,7 +968,7 @@ class DDP_Trainer():
             writer.add_scalar('kitti_f1_occ', f1_occ, self.step)
             writer.add_scalar('kitti_epe_noc', epe_noc, self.step)
             writer.add_scalar('kitti_f1_noc', f1_noc, self.step)
-            
+        
         if self.opt.optical_flow and resize_mode:
             self.ddp_model.eval()
             out_list, epe_list = [], []
@@ -1128,7 +1164,7 @@ class DDP_Trainer():
                 outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
                 
         return outputs
-    
+
     def _run_batch(self, inputs, batch_idx):
         self.model_optimizer.zero_grad()
         start_batch_time = time.time()
@@ -1138,38 +1174,7 @@ class DDP_Trainer():
         else:
             outputs = self.ddp_model(inputs)
 
-        if self.opt.loss_type == 'arflowloss':
-            pyramid_flows = []
-            for idx_pair in self.idx_pair_list:
-                for scale in self.opt.scales:
-                    pyramid_flows.append(
-                        torch.cat(
-                        (outputs[('flow', idx_pair[0], idx_pair[1], scale)], outputs[('flow', idx_pair[1], idx_pair[0], scale)]), 
-                        dim=1)
-                        )
-                target = torch.cat((inputs['color_aug', idx_pair[0], 0], inputs['color_aug', idx_pair[1], 0]), dim=1)
-            
-            losses = {}
-            loss, l_ph_pyramid, l_sm_pyramid, flow_mean, pyramid_occ_mask1, pyramid_occ_mask2, \
-                pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target)
-            losses['loss'] = loss
-            
-            for scale in self.opt.scales:
-                losses['smo_loss_o1', scale] = l_sm_pyramid[scale]
-                losses['smo_loss_o2', scale] = l_sm_pyramid[scale]
-                losses['photo_loss_l1', scale] = l_ph_pyramid[scale]
-                losses['photo_loss_ssim', scale] = l_ph_pyramid[scale]
-                
-            for scale in self.opt.scales:
-                for idx_pair in self.idx_pair_list:
-                    outputs[('f_warped', idx_pair[0], idx_pair[1], scale)] = pyramid_im1_recons[scale]  # prev_img warped by curr_img and flow_prev_to_curr
-                    outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = pyramid_im2_recons[scale]   # curr_img warped by prev_img and flow_curr_to_prev
-                    outputs[('occ', idx_pair[0], idx_pair[1], scale)] = pyramid_occ_mask1[scale]
-                    outputs[('occ', idx_pair[1], idx_pair[0], scale)] = pyramid_occ_mask2[scale]
-        
-        else:
-            losses = self.mono_loss.compute_losses(inputs, outputs)
-
+        losses = self.mono_loss.compute_losses(inputs, outputs)
         losses['loss'].backward()
         self.model_optimizer.step()
 
@@ -1194,8 +1199,7 @@ class DDP_Trainer():
         self.start_time = time.time()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
-            self.eval_depth_flow()
-            
+                        
             if 'stage1' in self.cfg.train:
                 if self.epoch >= self.cfg.train.stage1.epoch:
                     self.arflow_loss.cfg.update(self.cfg.train.stage1.loss)

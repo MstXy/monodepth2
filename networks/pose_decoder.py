@@ -12,7 +12,7 @@ from collections import OrderedDict
 
 
 class PoseDecoder(nn.Module):
-    def __init__(self, num_ch_enc, num_input_features, num_frames_to_predict_for=None, stride=1):
+    def __init__(self, num_ch_enc, num_input_features, num_frames_to_predict_for=None, stride=1, inter_output=False):
         super(PoseDecoder, self).__init__()
 
         self.num_ch_enc = num_ch_enc
@@ -21,6 +21,8 @@ class PoseDecoder(nn.Module):
         if num_frames_to_predict_for is None:
             num_frames_to_predict_for = num_input_features - 1
         self.num_frames_to_predict_for = num_frames_to_predict_for
+
+        self.inter_output = inter_output
 
         self.convs = OrderedDict()
         self.convs[("squeeze")] = nn.Conv2d(self.num_ch_enc[-1], 256, 1)
@@ -44,11 +46,17 @@ class PoseDecoder(nn.Module):
             if i != 2:
                 out = self.relu(out)
 
-        out = out.mean(3).mean(2)
+        if self.inter_output:
+            # out = 0.01 * out
+            # axisangle = out[:,:3*self.num_frames_to_predict_for, :, :]
+            # translation = out[:, 3*self.num_frames_to_predict_for:, :, :]
+            return out
+        else:
+            out = out.mean(3).mean(2)
 
-        out = 0.01 * out.view(-1, self.num_frames_to_predict_for, 1, 6)
+            out = 0.01 * out.view(-1, self.num_frames_to_predict_for, 1, 6)
 
-        axisangle = out[..., :3]
-        translation = out[..., 3:]
+            axisangle = out[..., :3]
+            translation = out[..., 3:]
 
-        return axisangle, translation
+            return axisangle, translation

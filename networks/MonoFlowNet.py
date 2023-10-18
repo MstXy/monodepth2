@@ -26,11 +26,18 @@ class MonoFlowNet(nn.Module):
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
 
         # modules
-        self.ResEncoder = networks.ResnetEncoder(self.opt.num_layers, self.opt.weights_init == "pretrained")
+        if self.opt.encoder == "efficientnet":
+            self.Encoder = networks.EfficientEncoder()
+            self.opt.mobile_backbone = "eff-b0"
+            self.use_ema = False
+            
+        elif self.opt.encoder == "resnet":
+            self.Encoder = networks.ResnetEncoder(self.opt.num_layers, self.opt.weights_init == "pretrained")
         
         if self.opt.depth_branch:
-            self.DepthDecoder = networks.DepthDecoder(self.ResEncoder.num_ch_enc, self.opt.scales)
-            self.PoseDecoder = networks.PoseDecoder(self.ResEncoder.num_ch_enc, self.num_pose_frames)
+            print("using efficient decoder")
+            self.DepthDecoder = networks.EfficientDecoder(self.Encoder.num_ch_enc)
+            self.PoseDecoder = networks.PoseDecoder(self.Encoder.num_ch_enc, self.num_pose_frames)
 
             if self.opt.pose_model_type == "separate_resnet":
                 self.PoseEncoder = networks.ResnetEncoder(
@@ -50,7 +57,7 @@ class MonoFlowNet(nn.Module):
         curr_bs = inputs[("color_aug", 0, 0)].size()[0]
         all_color_aug = torch.cat(
             [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])  # all images: ([i-1, i, i+1] * [L, R])
-        all_features = self.ResEncoder(all_color_aug)
+        all_features = self.Encoder(all_color_aug)
         all_features = [torch.split(f, curr_bs) for f in all_features]  # separate by frame
         
         features = {}
@@ -136,7 +143,6 @@ class MonoFlowNet(nn.Module):
                                  out_bwd['smooth_loss'] + out_bwd['photo_loss'] + out_bwd['census_loss'] + out_bwd['msd_loss']
             return outputs
 
-
         elif self.opt.optical_flow in ["pwc", ]:
             for (img1_idx, img2_idx) in idx_pair_list:
                 out_1 = self.cal_fwd_pwcnet(features[img1_idx], features[img2_idx])
@@ -146,6 +152,13 @@ class MonoFlowNet(nn.Module):
                     outputs[('flow', img2_idx, img1_idx, scale)] = out_2['level'+str(scale)]
             return outputs
 
+        elif self.opt.optical_flow in ["arflow", ]:
+            imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] # all images: ([i-1, i, i+1])
+            features = [self.Encoder(img) for img in imgs]
+            outputs = self.FlowDecoder(imgs, features)
+            return outputs
+            
+            
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
         """
@@ -203,7 +216,7 @@ class MonoFlowNet(nn.Module):
                         axisangle[:, i], translation[:, i])
 
         return outputs
-
+        
     def build_flow_decoder(self):
         if self.opt.optical_flow in ["flownet", ]:
             feature_channels = [64, 64, 128, 256, 512]
@@ -282,6 +295,12 @@ class MonoFlowNet(nn.Module):
 
         elif self.opt.optical_flow in ["pwc", ]:
             return None, networks.PWCDecoder()
+
+        elif self.opt.optical_flow in ["arflow", ]:
+            return None, networks.PWCLiteWithResNet().to(self.device)
+        
+        else: 
+            raise NotImplementedError
 
 def model_test():
     import time

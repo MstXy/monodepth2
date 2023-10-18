@@ -58,6 +58,30 @@ class MonodepthOptions:
                                  default='/mnt/km-nfs/ns100002-share/data_scene_flow')
         
 
+        # Model Arch ----------------
+        self.parser.add_argument("--encoder",
+                                 type=str,
+                                 help="alternative encoder choices",
+                                 default="efficientnet",
+                                 choices=["mobilenetv3-large", "mobilenetv3-small", "mobilenetv2", "mobilenetatt", "mobilenetatt2", 
+                                          "mobilevitv3_xs","mobilevitv3_s",
+                                          "efficientvit", "efficientnet","None"])
+        
+        self.parser.add_argument("--optical_flow",
+                                 type=str,
+                                 help="optical flow model",
+                                 # default="upflow")
+                                 default="arflow")
+                                 # default=flownet)
+                                 
+        self.parser.add_argument("--depth_branch",
+                                 type=str2bool,
+                                 help="predict depth or not",
+                                 default='False')
+        
+        
+        
+        
         
         self.parser.add_argument("--val_dataset",
                                  type=str,
@@ -181,13 +205,8 @@ class MonodepthOptions:
 
         
 
-        # optical flow branch ----------------
-        self.parser.add_argument("--optical_flow",
-                                 type=str,
-                                 help="optical flow model",
-                                 # default="upflow")
-                                 default="flownet")
-                                 # default=None)
+
+        
 
         self.parser.add_argument("--feature_type",
                                  type=int,
@@ -209,10 +228,7 @@ class MonodepthOptions:
                                  type=str2bool,
                                  default='False')
 
-        self.parser.add_argument("--depth_branch",
-                                 type=str2bool,
-                                 help="predict depth or not",
-                                 default='False')
+
         
         self.parser.add_argument("--png",
                                  help="if set, trains from raw KITTI png files (instead of jpgs)",
@@ -299,7 +315,7 @@ class MonodepthOptions:
                                  type=str,
                                  help="normal or shared",
                                  # default="separate_resnet",
-                                 default="shared",
+                                 default="separate_resnet",
                                  choices=["posecnn", "separate_resnet", "shared"])
 
         # SYSTEM options
