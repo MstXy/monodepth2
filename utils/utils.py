@@ -19,7 +19,7 @@ import flow_vis
 
 class InputPadder:
     """ Pads images such that dimensions are divisible by 'divided_by' :int """
-    def __init__(self, dims, pad_mode, mode='sintel', divided_by=8):
+    def __init__(self, dims, pad_mode=torch.nn.ReplicationPad2d, mode='sintel', divided_by=8):
         self.ht, self.wd = dims[-2:]
         pad_ht = (((self.ht // divided_by) + 1) * divided_by - self.ht) % divided_by
         pad_wd = (((self.wd // divided_by) + 1) * divided_by - self.wd) % divided_by

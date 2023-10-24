@@ -37,7 +37,6 @@ class MonoFlowNet(nn.Module):
         if self.opt.depth_branch:
             print("using efficient decoder")
             self.DepthDecoder = networks.EfficientDecoder(self.Encoder.num_ch_enc)
-            self.PoseDecoder = networks.PoseDecoder(self.Encoder.num_ch_enc, self.num_pose_frames)
 
             if self.opt.pose_model_type == "separate_resnet":
                 self.PoseEncoder = networks.ResnetEncoder(
@@ -156,8 +155,7 @@ class MonoFlowNet(nn.Module):
             imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] # all images: ([i-1, i, i+1])
             features = [self.Encoder(img) for img in imgs]
             outputs = self.FlowDecoder(imgs, features)
-            return outputs
-            
+            return outputs            
             
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
@@ -304,47 +302,74 @@ class MonoFlowNet(nn.Module):
 
 def model_test():
     import time
+    from thop import profile
+
     initial_opt.depth_branch = True
-    initial_opt.optical_flow = 'flownet'
-    initial_opt.batch_size = 10
+    initial_opt.optical_flow = 'arflow'
+    initial_opt.batch_size = 1
 
     model = MonoFlowNet().to(initial_opt.device)
     inputs = {}
     for i in initial_opt.frame_ids:
         inputs[("color_aug", i, 0)] = torch.randn(initial_opt.batch_size, 3, 192, 640).to(initial_opt.device)
 
-    ## params and flops evaluation
-    from thop import profile
-    flops, params = profile(model, inputs=(inputs,))
-    print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
-    t1 = time.time()
-    outputs = model(inputs)
-    print('time spent:', time.time() - t1)
-    for k, v in outputs.items():
-        print(k, v.shape)
+    verbose = False
+    # check params and FLOPs
+    # test_model = TestModel(encoder_test, depth_decoder_test)
+    
+    macs, params = profile(model, inputs=(inputs,), verbose=verbose)
+    print(f'Params/FLOP: {params * 1e-6:.2f} M, {macs * 1e-9:.2f}G FLOPS')
+    
+    total = sum([p.numel() for p in model.parameters() if p.requires_grad])
+    print("model param counts total: %.2fM" % (total / 1e6))
+    
+    total = sum([p.numel() for p in model.Encoder.parameters() if p.requires_grad])
+    print("model param counts Encoder: %.2fM" % (total / 1e6))
+    
+    total = sum([p.numel() for p in model.FlowDecoder.parameters() if p.requires_grad])
+    print("model param counts FlowDecoder: %.2fM" % (total / 1e6))
+    
+    total = sum([p.numel() for p in model.DepthDecoder.parameters() if p.requires_grad])
+    print("model param counts DepthDecoder: %.2fM" % (total / 1e6))
+
+    total += sum([p.numel() for p in model.PoseEncoder.parameters() if p.requires_grad])
+    print("model param counts DepthDecoder + PoseDecoder: %.2fM" % (total / 1e6))
+
+
+    # ## params and flops evaluation
+    # from thop import profile
+    # flops, params = profile(model, inputs=(inputs,))
+    # print(flops / 1e9, 'GFLOP', params / 1e6, 'M parameters')
+    # t1 = time.time()
+    # outputs = model(inputs)
+    # print('time spent:', time.time() - t1)
+    # for k, v in outputs.items():
+    #     print(k, v.shape)
 
 if __name__ =="__main__":
-    initial_opt.optical_flow='pwc'
-    net = MonoFlowNet()
-    paras = []
-    for name, param in net.named_parameters():
-        if 'ResEncoder' in name:
-            print('not update', name)
-            param.requires_grad = False
+    
+    # initial_opt.optical_flow='pwc'
+    # net = MonoFlowNet()
+    # paras = []
+    # for name, param in net.named_parameters():
+    #     if 'ResEncoder' in name:
+    #         print('not update', name)
+    #         param.requires_grad = False
             
-        elif 'FlowDecoder' in name:
-            print('update only', name)
-            paras.append(param)
-            param.requires_grad = True
-        else:
-            raise NotImplementedError
+    #     elif 'FlowDecoder' in name:
+    #         print('update only', name)
+    #         paras.append(param)
+    #         param.requires_grad = True
+    #     else:
+    #         raise NotImplementedError
             
-    net.cuda()
-    for name, p in net.named_parameters():
-        print(name, p.requires_grad)
-    # print(net)
-
-
+    # net.cuda()
+    # for name, p in net.named_parameters():
+    #     print(name, p.requires_grad)
+    # # print(net)
+    
+    model_test()
+    
 
 
 

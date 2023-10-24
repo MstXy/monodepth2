@@ -1,0 +1,41 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Module",
+            "type": "python",
+            "request": "launch",
+            "module": "monodepth2.train_MonoFlowNet",
+            "justMyCode": true,
+            "env": {"PYTHONPATH": "${workspaceFolder}/"},
+            "args": [
+                "--depth_branch", "False",
+                "--optical_flow", "pwc",
+                "--batch_size", "1",
+                "--num_workers", "0",
+                "--log_frequency", "10",
+                "--train_dataset", "kitti", 
+                "--data_path", "/mnt/km-nfs/ns100002-share/KITTI_raw",
+                "--data_path_KITTI_mv15", "/home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/",
+                "--data_path_FlyingChairs", "/dlData/FlyingChairs/FlyingChairs_release",
+                "--val_data_root", "/mnt/km-nfs/ns100002-share/data_scene_flow",
+                "--norm_trans", "False",
+                "--model_name", "ARFlow",
+                "--loss_type", "arflowloss",
+                "--flow_occ_check", "True",
+                "--save_frequency", "1",
+                "--device", "cuda:0",
+                "--feature_type", "0",
+                "--learning_rate", "0.0003",
+                "--scales", "0", "1", "2", "3",
+                "--frame_ids", "-1","0", 
+                "--freeze_Resnet", "False",
+                "--load_weights_folder", "/mnt/km-nfs/ns100002-share/Projects/mono_log/6009/ARFlow/models/weights_62"
+            ]
+        }
+    ]
+}
+

@@ -55,6 +55,7 @@ from monodepth2.utils.utils import InputPadder, forward_interpolate
 
 from monodepth2.ARFlow_losses.flow_loss import unFlowLoss
 
+torch.set_num_threads(10)
 
 IF_DEBUG = False
 if IF_DEBUG:
@@ -65,9 +66,6 @@ if IF_DEBUG:
     #     pdb.pm()  # post-mortem debugger
     # sys.excepthook = debughook
 
-print(torch.get_num_threads())
-torch.set_num_threads(10)
-print(torch.get_num_threads())
 
 class SSIM(nn.Module):
     """Layer to compute the SSIM loss between a pair of images
@@ -565,12 +563,13 @@ def load_train_objs():
         # opt.height = 384
         # opt.width = 512
         opt.frame_ids=[-1, 0]
+        
     elif opt.train_dataset in ['difint']:
         from monodepth2.datasets.difint_dataset import DiFintDataset
         train_dataset = DiFintDataset(frame_ids=opt.frame_ids, cam_idxs_list=['E'], num_scales=1)
         # opt.height=256
         # opt.width=640
-
+        
     else:
         raise NotImplementedError
     
@@ -580,7 +579,7 @@ def load_train_objs():
         batch_size=opt.batch_size,
         num_workers=opt.num_workers,
         pin_memory=True,
-        shuffle=True,
+        shuffle= False if opt.ddp else True,
         sampler=(torch.utils.data.distributed.DistributedSampler(train_dataset) if opt.ddp else None),
         drop_last=True
     )
@@ -600,7 +599,7 @@ def load_val_objs():
             opt.data_path, val_filenames, opt.height, opt.width,
             opt.frame_ids, 4, is_train=False, img_ext='.png')
         val_loader = DataLoader(
-            val_dataset, opt.batch_size, True,
+            val_dataset, opt.batch_size, shuffle= False if opt.ddp else True,
             num_workers=opt.num_workers, pin_memory=False, drop_last=True)
     return val_dataset, val_loader
 
@@ -621,14 +620,15 @@ class DDP_Trainer():
     
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
-        self.gpu_id = gpu_id
-        self.is_master_node = (self.gpu_id == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if opt.ddp else True
-
+        self.gpu_id = torch.cuda.current_device() if opt.ddp else gpu_id
+        self.is_master_node = (str(self.gpu_id) == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if opt.ddp else True
         self.train_loader = train_loader
         ############### val dataset ###############
         
         num_train_samples = len(train_dataset)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
+        if opt.ddp:
+             self.num_total_steps = self.num_total_steps // opt.world_size
         self.val_dataset = val_dataset
         self.val_loader = val_loader
         self.val_iter = iter(self.val_loader)
@@ -661,7 +661,7 @@ class DDP_Trainer():
         self.resize = {}
         for i in range(self.num_scales):
             s = 2 ** i
-            self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s))
+            self.resize[i] = transforms.Resize((self.opt.height // s, self.opt.width // s), antialias=True)
                                                # interpolation=Image.ANTIALIAS)
                                                
         self.norm_trans = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], inplace=True)
@@ -697,9 +697,11 @@ class DDP_Trainer():
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
-            self.ddp_model = DDP(self.model.to(self.gpu_id), device_ids=[self.gpu_id], find_unused_parameters=True)
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
+            
+            
         if opt.freeze_Resnet:
             paras = []
             for name, param in self.ddp_model.named_parameters():
@@ -733,6 +735,10 @@ class DDP_Trainer():
             self.save_opts()
             print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using: device cuda:", self.gpu_id)
+        
+        self.depth_metric_names = [
+            "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
+
 
     def load_ddp_model(self):
         """Load model(s) from disk
@@ -767,7 +773,7 @@ class DDP_Trainer():
         """Print a logging statement to the terminal
         """
         loss = losses["loss"].cpu().data
-        samples_per_sec = self.opt.batch_size / duration
+        samples_per_sec = self.opt.batch_size / duration * opt.world_size
         time_sofar = time.time() - self.start_time
         training_time_left = (self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         curr_lr = self.model_optimizer.param_groups[0]['lr']
@@ -857,17 +863,22 @@ class DDP_Trainer():
         if self.opt.depth_branch:
             try:
                 inputs = next(self.val_iter)
-            except StopIteration:
+            except StopIteration:                
                 self.val_iter = iter(self.val_loader)
                 inputs = next(self.val_iter)
-
+                
             with torch.no_grad():
-                outputs, losses = self._run_batch(inputs, batch_idx=1)
+                for key, ipt in inputs.items():
+                    inputs[key] = ipt.to(self.gpu_id)
+                outputs = self._run_batch(inputs)
+                losses = self.mono_loss.compute_losses(inputs, outputs)
 
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
                 self.log("val", inputs, outputs, losses)
+                for i, metric in enumerate(self.depth_metric_names):
+                    print('depth eval: metric:', metric, 'val', losses[metric])
                 del inputs, outputs, losses
 
         resize_mode = True # pad mode or resize mode
@@ -898,23 +909,24 @@ class DDP_Trainer():
                     padder = InputPadder(image1_ori.shape, mode='kitti', divided_by=64, pad_mode='constant')  #'constant', 'reflect', 'replicate' or 'circular'. Default: 'constant'
                     image1, image2 = padder.pad(image1_ori, image2_ori)
                     with torch.no_grad():
-                        input_dict = {}
+                        input = {}
                         if len(self.opt.frame_ids)==3:
-                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                            input[("color_aug", -1, 0)], input[("color_aug", 0, 0)], input[("color_aug", 1, 0)] = \
                             image1, image2, image1
                         elif len(self.opt.frame_ids)==2:
-                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)] = image1, image2
+                            input[("color_aug", -1, 0)], input[("color_aug", 0, 0)] = image1, image2
                             
                         if opt.model_name=="PWC_from_img":
                             out_dict = self.ddp_model(image1, image2)
                             flow_1_2 = out_dict['level0'][0]
                         else:
-                            out_dict = self.ddp_model(input_dict)
+                            out_dict = self.ddp_model(input)
                             flow_1_2 = out_dict['flow', -1, 0, 0][0]
                     flow = padder.unpad(flow_1_2).cpu()
                     epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
                     mag = torch.sum(flow_gt**2, dim=0).sqrt()
-                    
+                    del input_dict, input, out_dict
+
                     # vis
                     if (self.epoch+1) % 10 ==0:
                         err_map = torch.sum(torch.abs(flow - flow_gt) * valid_gt, dim=0)
@@ -1001,19 +1013,20 @@ class DDP_Trainer():
                     image2 = resize_to_train_size(image2_ori)
                     
                     with torch.no_grad():
-                        input_dict = {}
+                        input = {}
                         if len(self.opt.frame_ids)==3:
-                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)], input_dict[("color_aug", 1, 0)] = \
+                            input[("color_aug", -1, 0)], input[("color_aug", 0, 0)], input[("color_aug", 1, 0)] = \
                             image1, image2, image1
                         elif len(self.opt.frame_ids)==2:
-                            input_dict[("color_aug", -1, 0)], input_dict[("color_aug", 0, 0)] = image1, image2
+                            input[("color_aug", -1, 0)], input[("color_aug", 0, 0)] = image1, image2
                             
                         if opt.model_name=="PWC_from_img":
                             out_dict = self.ddp_model(image1, image2)
                             flow_1_2 = out_dict['level0'][0]
                         else:
-                            out_dict = self.ddp_model(input_dict)
+                            out_dict = self.ddp_model(input)
                             flow_1_2 = out_dict['flow', -1, 0, 0][0]
+                            
                     # flow = padder.unpad(flow_1_2).cpu()
                     flow_1_2[0, :, :] = flow_1_2[0, :, :] / self.opt.width * W
                     flow_1_2[1, :, :] = flow_1_2[1, :, :] / self.opt.height * H 
@@ -1022,6 +1035,8 @@ class DDP_Trainer():
 
                     epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
                     mag = torch.sum(flow_gt**2, dim=0).sqrt()
+                    del input_dict, input, out_dict
+
                     
                     # vis
                     if (self.epoch+1) % 10 ==0:
@@ -1070,12 +1085,12 @@ class DDP_Trainer():
             print(" Validation KITTI epe_noc, f1_noc\n: %f, %f" % (epe_noc, f1_noc))
             
             writer = self.writers['val']
-            writer.add_scalar('kitti_epe', epe_all, self.step)
-            writer.add_scalar('kitti_f1', f1_all, self.step)
-            writer.add_scalar('kitti_epe_occ', epe_occ, self.step)
-            writer.add_scalar('kitti_f1_occ', f1_occ, self.step)
-            writer.add_scalar('kitti_epe_noc', epe_noc, self.step)
-            writer.add_scalar('kitti_f1_noc', f1_noc, self.step)
+            writer.add_scalar('kitti_eval/_epe', epe_all, self.step)
+            writer.add_scalar('kitti_eval/_f1', f1_all, self.step)
+            writer.add_scalar('kitti_eval/_epe_occ', epe_occ, self.step)
+            writer.add_scalar('kitti_eval/_f1_occ', f1_occ, self.step)
+            writer.add_scalar('kitti_eval/_epe_noc', epe_noc, self.step)
+            writer.add_scalar('kitti_eval/_f1_noc', f1_noc, self.step)
             
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
@@ -1165,40 +1180,48 @@ class DDP_Trainer():
                 
         return outputs
 
-    def _run_batch(self, inputs, batch_idx):
+    def _run_batch(self, inputs):
         self.model_optimizer.zero_grad()
-        start_batch_time = time.time()
+        
         self.preprocess(inputs)
         if self.opt.model_name == "PWC_from_img":
             outputs = self.calculate_pwc_outdict(inputs)
         else:
             outputs = self.ddp_model(inputs)
 
-        losses = self.mono_loss.compute_losses(inputs, outputs)
-        losses['loss'].backward()
-        self.model_optimizer.step()
-
-        # ===== log
-        early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
-        late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
-        if early_phase or late_phase:
-            self.log_time(batch_idx, time.time() - start_batch_time, losses)
-            self.log("train", inputs, outputs, losses)
-        self.step += 1
-        return outputs, losses
+        return outputs
 
     def _run_epoch(self):
-        for batch_idx, inputs in enumerate(self.train_loader):
+        progress_bar = tqdm(self.train_loader, desc=f"Epoch {self.epoch}", disable=not self.is_master_node)
+        for batch_idx, inputs in enumerate(progress_bar):
             # if batch_idx > 1500:
             #     break
             for key, ipt in inputs.items():
                 inputs[key] = ipt.to(self.gpu_id)
-            self._run_batch(inputs=inputs, batch_idx=batch_idx)
+            start_batch_time = time.time()
+            outputs = self._run_batch(inputs=inputs)
+            losses = self.mono_loss.compute_losses(inputs, outputs)
+            losses['loss'].backward()
+            self.model_optimizer.step()
 
+            # ===== log
+            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
+            late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
+            if early_phase or late_phase:
+                self.log_time(batch_idx, time.time() - start_batch_time, losses)
+                self.log("train", inputs, outputs, losses)
+            self.step += 1
+            
     def train(self, ):
         self.start_time = time.time()
+        
+        if self.is_master_node:
+            self.save_ddp_model()
+            self.eval_depth_flow()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
+            if opt.ddp:
+                self.train_loader.sampler.set_epoch(epoch)
                         
             if 'stage1' in self.cfg.train:
                 if self.epoch >= self.cfg.train.stage1.epoch:
@@ -1228,18 +1251,24 @@ def ddp_setup(rank, world_size):
 
 def main(rank: int, world_size: int):
     ddp_setup(rank, world_size)
-    dataset = load_train_objs()
-    train_loader = prepare_dataloader(dataset)
-    trainer = DDP_Trainer(gpu_id=rank, train_loader=train_loader)
+    train_dataset, train_loader = load_train_objs()
+    val_dataset, val_loader = load_val_objs()
+    trainer = DDP_Trainer(gpu_id=rank+4, train_dataset=train_dataset, train_loader=train_loader, val_dataset=val_dataset, val_loader=val_loader)
     trainer.train()
     destroy_process_group()
 
 
 if __name__ == "__main__":
     if opt.ddp:
-        # world_size = torch.cuda.device_count()
+        import os
+        os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
+        os.environ["CUDA_VISIBLE_DEVICES"]="4, 5, 6, 7, 0, 1, 2"
+        opt.world_size = torch.cuda.device_count()
         mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
+    
+    
     else:
+        opt.world_size = 1
         train_dataset, train_loader = load_train_objs()
         val_dataset, val_loader = load_val_objs()
         trainer = DDP_Trainer(int(opt.device[-1]), train_dataset, train_loader,
