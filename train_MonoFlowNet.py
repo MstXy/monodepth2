@@ -703,7 +703,7 @@ class DDP_Trainer():
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
-            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()])
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
             
@@ -752,16 +752,10 @@ class DDP_Trainer():
         self.opt.load_weights_folder = os.path.expanduser(self.opt.load_weights_folder)
         assert os.path.isdir(self.opt.load_weights_folder), \
             "Cannot find folder {}".format(self.opt.load_weights_folder)
-
+        print("loading model from folder {}".format(self.opt.load_weights_folder))
         chechpoint_path = os.path.join(self.opt.load_weights_folder, "monoFlow.pth")
-        print("loading model from folder {}".format(chechpoint_path))
-        
-        
-        # Load the model's state_dict
-
         self.model.load_state_dict(
-            torch.load(chechpoint_path, map_location='cuda'))
-        
+            torch.load(chechpoint_path, map_location='cpu'))
 
         # loading adam state
         optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam.pth")
