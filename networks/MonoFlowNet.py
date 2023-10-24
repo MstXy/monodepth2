@@ -37,7 +37,6 @@ class MonoFlowNet(nn.Module):
         if self.opt.depth_branch:
             print("using efficient decoder")
             self.DepthDecoder = networks.EfficientDecoder(self.Encoder.num_ch_enc)
-
             if self.opt.pose_model_type == "separate_resnet":
                 self.PoseEncoder = networks.ResnetEncoder(
                     self.opt.num_layers,
@@ -152,10 +151,16 @@ class MonoFlowNet(nn.Module):
             return outputs
 
         elif self.opt.optical_flow in ["arflow", ]:
-            imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] # all images: ([i-1, i, i+1])
-            features = [self.Encoder(img) for img in imgs]
-            outputs = self.FlowDecoder(imgs, features)
-            return outputs            
+            #  images: [0, -1, 1] or [0, -1]
+            # features: [0, -1, 1] or [0, -1]
+            imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] 
+            in_feat = []
+            for k, v in features.items():
+                in_feat.append(v)
+            # features2 = [self.Encoder(img) for img in imgs]
+            outputs = self.FlowDecoder(imgs, in_feat)
+            return outputs
+            
             
     def predict_poses(self, inputs, features):
         """Predict poses between input frames for monocular sequences.
@@ -300,6 +305,7 @@ class MonoFlowNet(nn.Module):
         else: 
             raise NotImplementedError
 
+
 def model_test():
     import time
     from thop import profile
@@ -370,6 +376,7 @@ if __name__ =="__main__":
     
     model_test()
     
+
 
 
 

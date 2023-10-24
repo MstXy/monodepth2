@@ -392,6 +392,11 @@ class MonoFlowLoss():
                 loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
                 total_loss += loss
                 losses["depth_loss/scale_{}".format(scale)] = loss
+                
+                if scale == 0:
+                    losses["loss/ident"] = identity_reprojection_loss.mean()
+                    losses["loss/reproj"] = reprojection_loss.mean()
+                    losses["loss/combined"] = to_optimise.mean()
 
         # total_loss /= self.num_scales
         losses["loss"] = total_loss
@@ -621,6 +626,7 @@ class DDP_Trainer():
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
         self.gpu_id = torch.cuda.current_device() if opt.ddp else gpu_id
+        
         self.is_master_node = (str(self.gpu_id) == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if opt.ddp else True
         self.train_loader = train_loader
         ############### val dataset ###############
@@ -697,7 +703,7 @@ class DDP_Trainer():
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
-            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()])
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
             
@@ -746,10 +752,16 @@ class DDP_Trainer():
         self.opt.load_weights_folder = os.path.expanduser(self.opt.load_weights_folder)
         assert os.path.isdir(self.opt.load_weights_folder), \
             "Cannot find folder {}".format(self.opt.load_weights_folder)
-        print("loading model from folder {}".format(self.opt.load_weights_folder))
+
         chechpoint_path = os.path.join(self.opt.load_weights_folder, "monoFlow.pth")
+        print("loading model from folder {}".format(chechpoint_path))
+        
+        
+        # Load the model's state_dict
+
         self.model.load_state_dict(
-            torch.load(chechpoint_path, map_location='cpu'))
+            torch.load(chechpoint_path, map_location='cuda'))
+        
 
         # loading adam state
         optimizer_load_path = os.path.join(self.opt.load_weights_folder, "adam.pth")
@@ -1197,7 +1209,7 @@ class DDP_Trainer():
             # if batch_idx > 1500:
             #     break
             for key, ipt in inputs.items():
-                inputs[key] = ipt.to(self.gpu_id)
+                inputs[key] = ipt.to(self.gpu_id)            
             start_batch_time = time.time()
             outputs = self._run_batch(inputs=inputs)
             losses = self.mono_loss.compute_losses(inputs, outputs)
@@ -1205,9 +1217,11 @@ class DDP_Trainer():
             self.model_optimizer.step()
 
             # ===== log
+
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
             late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
             if early_phase or late_phase:
+                print("logging batch_idx:", batch_idx)
                 self.log_time(batch_idx, time.time() - start_batch_time, losses)
                 self.log("train", inputs, outputs, losses)
             self.step += 1
@@ -1215,9 +1229,11 @@ class DDP_Trainer():
     def train(self, ):
         self.start_time = time.time()
         
-        if self.is_master_node:
-            self.save_ddp_model()
-            self.eval_depth_flow()
+        
+        # whether evaluate first before training starts
+        # if self.is_master_node:
+        #     self.save_ddp_model()
+        #     self.eval_depth_flow()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
             if opt.ddp:
@@ -1262,7 +1278,7 @@ if __name__ == "__main__":
     if opt.ddp:
         import os
         os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
-        os.environ["CUDA_VISIBLE_DEVICES"]="4, 5, 6, 7, 0, 1, 2"
+        os.environ["CUDA_VISIBLE_DEVICES"]="0, 1, 2, 3, 4, 5, 6, 7"
         opt.world_size = torch.cuda.device_count()
         mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
     
