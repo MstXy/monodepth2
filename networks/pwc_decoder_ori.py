@@ -393,7 +393,7 @@ class PWCDecoder_from_img(nn.Module):
         x_intm, flow_res = self.flow_estimator(x)
         flow6 = flow_res + flow6
         flow_fine6 = self.context_net(torch.cat((x_intm, flow6), dim=1))
-        flow6 = 0.625*(flow6 + flow_fine6)
+        flow6 = (flow6 + flow_fine6)
         up_flow6 = F.interpolate(flow6 * 2, scale_factor=2, mode='bilinear', align_corners=True)
         # up_feat6 = self.upfeat6(x)
 
@@ -411,7 +411,7 @@ class PWCDecoder_from_img(nn.Module):
         # x = torch.cat((self.conv5_4(x), x),1)
         x_intm, flow_res = self.flow_estimator(x)
         flow5 = flow_res + up_flow6
-        flow5 = 1.5*(flow5 + self.context_net(torch.cat((x_intm, flow5), dim=1)))
+        flow5 = (flow5 + self.context_net(torch.cat((x_intm, flow5), dim=1)))
         
         # flow5 = self.predict_flow5(x) + up_flow6 + self.context_net5(torch.cat((x, up_flow6), dim=1))
         # up_flow5 = self.deconv5(flow5)
@@ -425,7 +425,7 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((corr4, self.conv_1x1[2](c14), up_flow5), 1)
         x_intm, flow_res = self.flow_estimator(x)
         flow4 = flow_res + up_flow5
-        flow4 = 2*(flow4 + self.context_net(torch.cat((x_intm, flow4), dim=1)))
+        flow4 = (flow4 + self.context_net(torch.cat((x_intm, flow4), dim=1)))
         
 
         # x = torch.cat((corr4, c14, up_flow5), 1)
@@ -446,7 +446,7 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((corr3, self.conv_1x1[3](c13), up_flow4), 1)
         x_intm, flow_res = self.flow_estimator(x)
         flow3 = flow_res + up_flow4
-        flow3 = 2.5*(flow3 + self.context_net(torch.cat((x_intm, flow3), dim=1)))
+        flow3 = (flow3 + self.context_net(torch.cat((x_intm, flow3), dim=1)))
         
         
         # x = torch.cat((corr3, c13, up_flow4, up_feat4), 1)
@@ -468,7 +468,7 @@ class PWCDecoder_from_img(nn.Module):
         x = torch.cat((corr2, self.conv_1x1[4](c12), up_flow3), 1)
         x_intm, flow_res = self.flow_estimator(x)
         flow2 = flow_res + up_flow3
-        flow2 = 2.5*(flow2 + self.context_net(torch.cat((x_intm, flow2), dim=1)))
+        flow2 = (flow2 + self.context_net(torch.cat((x_intm, flow2), dim=1)))
         
         # x = torch.cat((corr2, c12, up_flow3, up_feat3), 1)
         # x = torch.cat((self.conv2_0(x), x),1)
@@ -524,9 +524,9 @@ class PWCDecoder_from_img(nn.Module):
 
     def upsample_conv(self, flow_init):
         '''get upsampled output flow'''
-        flow_up_1 = F.interpolate(flow_init, scale_factor=2, mode='bilinear', align_corners=True)
+        flow_up_1 = F.interpolate(flow_init * 2, scale_factor=2, mode='bilinear', align_corners=True)
         flow_up_1 = self.pred_flow_up2(self.pred_flow_up1(flow_up_1))
-        flow_up_2 = F.interpolate(flow_up_1, scale_factor=2, mode='bilinear', align_corners=True)
+        flow_up_2 = F.interpolate(flow_up_1 * 2, scale_factor=2, mode='bilinear', align_corners=True)
         flow_up_2 = self.pred_flow_up2(self.pred_flow_up1(flow_up_2))
         return flow_up_2
 
