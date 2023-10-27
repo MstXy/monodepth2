@@ -378,7 +378,9 @@ class PWCDecoder_from_img(nn.Module):
 
         flow6 = torch.zeros_like(c16[:, :2, :, :])
         warp6 = self.warp_out(c26, flow6)
-        corr6 = self.corr_block(c16, warp6)
+        
+        # print("mean error is {}, total num is {}".format(torch.mean(warp6-c26), warp6.shape[0]*warp6.shape[1]*warp6.shape[2]*warp6.shape[3]))
+        corr6 = self.corr_block(c16, c26)
         corr6 = self.leakyRELU(corr6)
         
         # x = torch.cat((self.conv6_0(corr6), corr6),1)
@@ -469,6 +471,11 @@ class PWCDecoder_from_img(nn.Module):
         x_intm, flow_res = self.flow_estimator(x)
         flow2 = flow_res + up_flow3
         flow2 = (flow2 + self.context_net(torch.cat((x_intm, flow2), dim=1)))
+        
+        
+        
+        
+        
         
         # x = torch.cat((corr2, c12, up_flow3, up_feat3), 1)
         # x = torch.cat((self.conv2_0(x), x),1)

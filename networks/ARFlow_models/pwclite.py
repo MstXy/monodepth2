@@ -255,22 +255,39 @@ class PWCLite(nn.Module):
         flows_12 = [flo[:, 2:] for flo in flows[::-1]]
         return flows_10, flows_12
 
-    def forward(self, input_dict, with_bk=True):
-        img1, img2 = input_dict[('color_aug', -1, 0)], input_dict[('color_aug', 0, 0)]
-        x = torch.cat([img1, img2], dim=1)
-        n_frames = x.size(1) / 3
 
-        imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
-        x = [self.feature_pyramid_extractor(img) + [img] for img in imgs]
+    def forward(self, imgs, features, with_bk=True):
+        # features: [0, -1, 1]
+        outdict = {}
+        x = []
+        for i, img in enumerate(imgs):
+            tmp_feats = features[i]
+            tmp_feats.append(self.last_layer(tmp_feats[-1]))
+            x.append(tmp_feats[::-1] + [img])
+
+        n_frames = len(imgs)
 
         res_dict = {}
         if n_frames == 2:
             res_dict['flows_fw'] = self.forward_2_frames(x[0], x[1])
             if with_bk:
                 res_dict['flows_bw'] = self.forward_2_frames(x[1], x[0])
+                for i in range(4):
+                    outdict[('flow', -1, 0, i)] =  res_dict['flows_fw'][i]
+                    outdict[('flow', 0, -1, i)] =  res_dict['flows_bw'][i]
         elif n_frames == 3:
-            flows_10, flows_12 = self.forward_3_frames(x[0], x[1], x[2])
-            res_dict['flows_fw'], res_dict['flows_bw'] = flows_12, flows_10
+            # flows_10, flows_12 = self.forward_3_frames(x[1], x[0], x[2]) # original is 0, 1, 2
+            # res_dict['flows_fw'], res_dict['flows_bw'] = flows_12, flows_10
+            
+
+            
+            for i in range(4):
+                outdict[('flow', -1, 0, i)] =  self.forward_2_frames(x[1], x[0])[i]
+                outdict[('flow', 0, -1, i)] =  self.forward_2_frames(x[0], x[1])[i]
+                outdict[('flow', 1, 0, i)] =  self.forward_2_frames(x[2], x[0])[i]
+                outdict[('flow', 0, 1, i)] =  self.forward_2_frames(x[0], x[2])[i]
+                
+
         elif n_frames == 5:
             flows_10, flows_12 = self.forward_3_frames(x[0], x[1], x[2])
             flows_21, flows_23 = self.forward_3_frames(x[1], x[2], x[3])
@@ -281,10 +298,6 @@ class PWCLite(nn.Module):
         else:
             raise NotImplementedError
         
-        outdict = {}
-        for i in range(4):
-            outdict[('flow', -1, 0, i)] =  res_dict['flows_fw'][i]
-            outdict[('flow', 0, -1, i)] =  res_dict['flows_bw'][i]
-        
         return outdict
+
 

@@ -117,6 +117,10 @@ class MonodepthOptions:
                                  type=bool,
                                  help='whether use ddp',
                                  default=False)
+        
+        self.parser.add_argument("--cuda_visible_devices",
+                                type=str,
+                                default="0, 1, 2, 3, 4, 5, 6, 7")
 
         self.parser.add_argument("--world_size",
                                  type=int,

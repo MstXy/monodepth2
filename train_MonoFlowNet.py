@@ -700,14 +700,16 @@ class DDP_Trainer():
         else:
             raise NotImplementedError
         
-        if self.opt.load_weights_folder is not None:
-            self.load_ddp_model()
+
         if opt.ddp:
-            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()])
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
             
+        if self.opt.load_weights_folder is not None:
+            self.load_ddp_model()
             
+        
         if opt.freeze_Resnet:
             paras = []
             for name, param in self.ddp_model.named_parameters():
@@ -758,7 +760,7 @@ class DDP_Trainer():
         
         
         # Load the model's state_dict
-        self.model.load_state_dict(
+        self.ddp_model.load_state_dict(
             torch.load(chechpoint_path, map_location='cpu'))
         
 
@@ -1216,7 +1218,6 @@ class DDP_Trainer():
             self.model_optimizer.step()
 
             # ===== log
-
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
             late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
             if early_phase or late_phase:
@@ -1245,7 +1246,11 @@ class DDP_Trainer():
                     
             if self.epoch > self.opt.occ_start_epoch:
                 opt.flow_occ_check = True
-                
+            
+            if self.epoch == 1:
+                for g in self.model_optimizer.param_groups:
+                    g['lr'] = g['lr'] * 0.7
+                    print('lr decay to ', g['lr'])
             self._run_epoch()
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:
@@ -1278,7 +1283,10 @@ if __name__ == "__main__":
         import os
         os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
         os.environ["CUDA_VISIBLE_DEVICES"]="0, 1, 2, 3, 4, 5, 6, 7"
-        opt.world_size = torch.cuda.device_count()
+        os.environ["CUDA_VISIBLE_DEVICES"]=opt.cuda_visible_devices
+        if not opt.world_size == torch.cuda.device_count():
+            print("using torch.cuda.device_count()={}, instead of opt.world_size".format(torch.cuda.device_count(), opt.world_size))
+            opt.world_size = torch.cuda.device_count()
         mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
     
     
