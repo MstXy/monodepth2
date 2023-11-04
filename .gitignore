@@ -9,3 +9,4 @@ log
 networks/log
 experiments
 test_and_doc
+.vscode

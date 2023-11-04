@@ -9,6 +9,7 @@ import json
 import math
 import os
 import sys
+import cv2
 import pdb
 file_dir = os.path.dirname(__file__)
 parent_project = os.path.dirname(file_dir)
@@ -599,7 +600,9 @@ def load_train_objs():
 
 def load_val_objs():
     if opt.val_dataset in ['kitti']:
-        val_filenames = mono_utils.readlines(fpath.format("val"))
+        splits_dir = os.path.join(os.path.dirname(__file__), "splits")
+        val_filenames = mono_utils.readlines(os.path.join(splits_dir, opt.eval_split, "nofirst_test_files.txt"))
+        # val_filenames = mono_utils.readlines(fpath.format("val"))
         val_dataset = datasets.KITTIRAWDataset(
             opt.data_path, val_filenames, opt.height, opt.width,
             opt.frame_ids, 4, is_train=False, img_ext='.png')
@@ -703,7 +706,7 @@ class DDP_Trainer():
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
         if opt.ddp:
-            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()])
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
             
@@ -869,28 +872,124 @@ class DDP_Trainer():
         Flow evaluation dataset:
 
         Depth evaluation dataset:
-            monodepth2/splits/eigen_zhou/val_files.txt
+            # monodepth2/splits/eigen_zhou/val_files.txt
+
+            Using: monodepth2/splits/eigen/test_files.txt
         """
+        print("Evaluation Depth and Flow:")
         if self.opt.depth_branch:
-            try:
-                inputs = next(self.val_iter)
-            except StopIteration:                
-                self.val_iter = iter(self.val_loader)
-                inputs = next(self.val_iter)
-                
+            MIN_DEPTH = 1e-3
+            MAX_DEPTH = 80
+            
+            self.ddp_model.eval()
+
+            pred_disps = []
+
+            print("-> Computing predictions with size {}x{}".format(
+                self.opt.height, self.opt.width))
+
             with torch.no_grad():
-                for key, ipt in inputs.items():
-                    inputs[key] = ipt.to(self.gpu_id)
-                outputs = self._run_batch(inputs)
-                losses = self.mono_loss.compute_losses(inputs, outputs)
+                for data in self.val_loader:
+                    for key, ipt in data.items():
+                        data[key] = ipt.to(self.gpu_id)
+                    output = self._run_batch(data)
 
-                if "depth_gt" in inputs:
-                    self.compute_depth_losses(inputs, outputs, losses)
+                    pred_disp, _ = disp_to_depth(output[("disp", 0)], self.opt.min_depth, self.opt.max_depth)
+                    pred_disp = pred_disp.cpu()[:, 0].numpy()
 
-                self.log("val", inputs, outputs, losses)
-                for i, metric in enumerate(self.depth_metric_names):
-                    print('depth eval: metric:', metric, 'val', losses[metric])
-                del inputs, outputs, losses
+                    if self.opt.post_process:
+                        N = pred_disp.shape[0] // 2
+                        pred_disp = batch_post_process_disparity(pred_disp[:N], pred_disp[N:, :, ::-1])
+
+                    pred_disps.append(pred_disp)
+
+                    del data, output
+
+            pred_disps = np.concatenate(pred_disps)
+                
+            splits_dir = os.path.join(os.path.dirname(__file__), "splits")
+            gt_path = os.path.join(splits_dir, self.opt.eval_split, "gt_depths.npz")
+            gt_depths = np.load(gt_path, allow_pickle=True, fix_imports=True, encoding='latin1')["data"]
+
+            print("-> Evaluating Depth - Mono evaluation - using median scaling")
+
+            errors = []
+            ratios = []
+
+            # omit certain indices
+            omit_idxs = [19, 26, 69, 83, 143, 154, 176, 201, 226, 269, 299, 328, 398, 423, 518, 526, 557, 592, 618, 642, 672, 677]
+            accumulated_idx= 0
+
+            for i in range(pred_disps.shape[0]):
+                # omit:
+                if i+1 in omit_idxs:
+                    accumulated_idx += 1
+                gt_idx = i + accumulated_idx
+                gt_depth = gt_depths[gt_idx]
+                gt_height, gt_width = gt_depth.shape[:2]
+
+                pred_disp = pred_disps[i]
+                pred_disp = cv2.resize(pred_disp, (gt_width, gt_height))
+                pred_depth = 1 / pred_disp
+
+                if self.opt.eval_split == "eigen":
+                    mask = np.logical_and(gt_depth > MIN_DEPTH, gt_depth < MAX_DEPTH)
+
+                    crop = np.array([0.40810811 * gt_height, 0.99189189 * gt_height,
+                                    0.03594771 * gt_width,  0.96405229 * gt_width]).astype(np.int32)
+                    crop_mask = np.zeros(mask.shape)
+                    crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = 1
+                    mask = np.logical_and(mask, crop_mask)
+
+                else:
+                    mask = gt_depth > 0
+
+                pred_depth = pred_depth[mask]
+                gt_depth = gt_depth[mask]
+
+                pred_depth *= self.opt.pred_depth_scale_factor
+                if not self.opt.disable_median_scaling:
+                    ratio = np.median(gt_depth) / np.median(pred_depth)
+                    ratios.append(ratio)
+                    pred_depth *= ratio
+
+                pred_depth[pred_depth < MIN_DEPTH] = MIN_DEPTH
+                pred_depth[pred_depth > MAX_DEPTH] = MAX_DEPTH
+
+                errors.append(compute_depth_errors_np(gt_depth, pred_depth))
+
+            if not self.opt.disable_median_scaling:
+                ratios = np.array(ratios)
+                med = np.median(ratios)
+                print(" Scaling ratios | med: {:0.3f} | std: {:0.3f}".format(med, np.std(ratios / med)))
+
+            mean_errors = np.array(errors).mean(0)
+
+            print("\n  " + ("{:>8} | " * 7).format("abs_rel", "sq_rel", "rmse", "rmse_log", "a1", "a2", "a3"))
+            print(("&{: 8.3f}  " * 7).format(*mean_errors.tolist()) + "\\\\")
+            print("\n-> Done!")
+            
+
+            
+            # try:
+            #     inputs = next(self.val_iter)
+            # except StopIteration:                
+            #     self.val_iter = iter(self.val_loader)
+            #     inputs = next(self.val_iter)
+                
+            # with torch.no_grad():
+            #     for key, ipt in inputs.items():
+            #         inputs[key] = ipt.to(self.gpu_id)
+            #     outputs = self._run_batch(inputs)
+            #     losses = self.mono_loss.compute_losses(inputs, outputs)
+
+            #     if "depth_gt" in inputs:
+            #         self.compute_depth_losses(inputs, outputs, losses)
+
+            #     self.log("val", inputs, outputs, losses)
+            #     for i, metric in enumerate(self.depth_metric_names):
+            #         print('depth eval: metric:', metric, 'val', losses[metric])
+            #     del inputs, outputs, losses
 
         resize_mode = True # pad mode or resize mode
         
@@ -1230,9 +1329,9 @@ class DDP_Trainer():
         
         
         # whether evaluate first before training starts
-        # if self.is_master_node:
-        #     self.save_ddp_model()
-        #     self.eval_depth_flow()
+        if self.is_master_node:
+            self.save_ddp_model()
+            self.eval_depth_flow()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
             if opt.ddp:
@@ -1277,7 +1376,7 @@ if __name__ == "__main__":
     if opt.ddp:
         import os
         os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
-        os.environ["CUDA_VISIBLE_DEVICES"]="0, 1, 2, 3, 4, 5, 6, 7"
+        os.environ["CUDA_VISIBLE_DEVICES"]="4, 5, 6, 7, 1, 2"
         opt.world_size = torch.cuda.device_count()
         mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
     

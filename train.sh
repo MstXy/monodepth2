@@ -1,0 +1,32 @@
+python \
+    /mnt/km-nfs/ns100002-share/zcy-exp/ddp/monodepth2/train_MonoFlowNet.py \
+    --log_dir /mnt/km-nfs/ns100002-share/depthcheck1029 \
+    --data_path /mnt/km-nfs/ns100002-share/KITTI_raw \
+    --val_data_root /mnt/km-nfs/ns100002-share/data_scene_flow \
+    --depth_branch True \
+    --optical_flow arflow \
+    --model_name MonoFlowNet \
+    --loss_type arloss \
+    --data_path_KITTI_mv15 /home/liu/AD_Data/DiFint/win_id4_share/KITTI/scene_flow_2015/ \
+    --data_path_FlyingChairs /dlData/FlyingChairs/FlyingChairs_release \
+    --encoder efficientnet \
+    --train_dataset kitti \
+    --save_frequency 5 \
+    --log_frequency 100 \
+    --scales 0 1 2 3 \
+    --loss_smo1_w 0 0 0 0 \
+    --loss_smo2_w 75 0 0 0 \
+    --loss_l1_w 0.15 0.15 0.15 0.15 \
+    --loss_ssim_w 0.85 0.85 0.85 0.85 \
+    --flow_occ_check True \
+    --occ_start_epoch 5 \
+    --height 192 \
+    --width 640 \
+    --freeze_Resnet False \
+    --frame_ids 0 -1 \
+    --num_workers 15 \
+    --batch_size 14 \
+    --learning_rate 0.0002 \
+    --device cuda:0 \
+    --ddp True \
+    --world_size 8
