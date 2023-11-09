@@ -303,7 +303,9 @@ def tensor_to_pil(input_tensor):
 
 
 def flow_to_pil(flow_to_vis, to_pil=True):
+
     flow_to_vis_dup = flow_to_vis.permute(1, 2, 0).clone().detach().cpu().numpy()
+    flow_to_vis_dup = flow_to_vis_dup / np.max(flow_to_vis_dup) * 255
     vis_flow = torch.from_numpy(
         flow_vis.flow_to_color(flow_to_vis_dup,
                                convert_to_bgr=False)).permute(2, 0, 1)
@@ -330,7 +332,8 @@ def stitching_and_show(img_list, ver=False, show=True):
     if not ver:
         stitching = Image.new('RGB', (img_num * W, H))
         i = 0
-        for img in img_list:
+        for im in img_list:
+            img = im.clone().detach()
             if img.size()[0] == 2:  # flow
                 to_pil = flow_to_pil
             else:
@@ -341,7 +344,8 @@ def stitching_and_show(img_list, ver=False, show=True):
     else:
         stitching = Image.new('RGB', (W, img_num * H))
         i = 0
-        for img in img_list:
+        for im in img_list:
+            img = im.clone().detach()
             if img.size()[0] == 2:  # flow
                 to_pil = flow_to_pil
             else:
@@ -412,7 +416,7 @@ def log_vis_2(inputs, outputs, img1_idx, img2_idx, j, scale=0):
         img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
         j: the j th img in batch
     '''
-    diff = img_diff_show(outputs[('f_warped', img1_idx, img2_idx, scale)][j], inputs['color_aug', img1_idx, 0][j])
+    diff = img_diff_show(outputs[('f_warped', img1_idx, img2_idx, scale)][j], inputs['color_aug', img1_idx, scale][j])
     diff_mask = diff * outputs[('occ', img1_idx, img2_idx, scale)][j].repeat(3, 1, 1)
     aa = outputs[('f_warped', img1_idx, img2_idx, scale)][j]
     source = inputs['color_aug', img1_idx, 0][j]
@@ -494,3 +498,99 @@ class pickle_saver():
         print('unzip file: %s' % zip_path)
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(extract_dir)
+            
+            
+
+
+def census_transform(image, patch_size):
+    """
+    Compute the Census Transform of an input image using PyTorch.
+    See the paper at https://arxiv.org/abs/1902.09145
+    and uflow implementation at https://github.com/google-research/google-research/blob/master/uflow/uflow_utils.py
+    Args:
+        image (Tensor): Input RGB image tensor of shape (batch_size, channels, height, width).
+        patch_size (int): Size of the local window for comparisons.
+
+    Returns:
+        diff_norm (Tensor): Census Transform result, normalized according to the DDFlow paper.
+    """
+
+
+    intensities = torch.sum(image, dim=1, keepdim=True) * 255.0
+    print("intensities.shape", intensities.shape)
+    # Create the Census Transform kernel
+    kernel = torch.eye(patch_size * patch_size).view(patch_size, patch_size, 1, patch_size * patch_size)
+    kernel = kernel.permute(3, 2, 0, 1)
+    
+    # Compute Census Transform using 2D convolution
+    neighbors = F.conv2d(intensities, kernel, padding=patch_size // 2)
+    
+    # Compute the difference between neighbors and intensities
+    diff = neighbors - intensities
+    
+    # Normalize the difference as per DDFlow paper
+    diff_norm = diff / torch.sqrt(0.81 + diff**2)
+    return diff_norm
+        
+
+
+def soft_hamming(a_bchw, b_bchw, thresh=0.1):
+    """
+    Calculate a soft Hamming distance between tensors a_bhwk and b_bhwk.
+
+    Args:
+        a_bhwk (Tensor): Tensor of shape (batch, height, width, features).
+        b_bhwk (Tensor): Tensor of shape (batch, height, width, features).
+        thresh (float): Threshold.
+
+    Returns:
+        Tensor: A tensor with values close to 1 where significantly different than thresh,
+        and close to 0 where significantly less different than thresh.
+    """
+    sq_dist_bhwk = (a_bchw - b_bchw) ** 2
+    soft_thresh_dist_bhwk = sq_dist_bhwk / (thresh + sq_dist_bhwk)
+    return torch.sum(soft_thresh_dist_bhwk, dim=3, keepdim=True)
+
+def zero_mask_border(mask_bchw, patch_size):
+    """
+    Used to ignore border effects from census_transform.
+
+    Args:
+        mask_bchw (Tensor): Input mask tensor of shape (batch, channels, height, width).
+        patch_size (int): Size of the local window.
+
+    Returns:
+        Tensor: Mask with the border regions zeroed out.
+    """
+    mask_padding = patch_size // 2
+    mask = mask_bchw[:, :, mask_padding:-mask_padding, mask_padding:-mask_padding]
+
+    # Pad the mask to maintain the original shape
+    padding = (mask_padding, mask_padding, mask_padding, mask_padding)
+    mask = F.pad(mask, padding)
+    return mask
+
+
+def census_loss(image_a_bchw, image_b_bchw, mask_bchw, patch_size=7, distance_metric_fn = lambda x : torch.pow((torch.abs(x) + 0.01), 0.4)):
+    """
+    Compares the similarity of the Census Transform of two images.
+
+    Args:
+        image_a_bchw (Tensor): Input image A of shape (batch, channels, height, width).
+        image_b_bchw (Tensor): Input image B of shape (batch, channels, height, width).
+        mask_bchw (Tensor): Mask of shape (batch, channels, height, width).
+        patch_size (int): Size of the local window for Census Transform.
+        distance_metric_fn (function): Distance metric function for Hamming distance.
+
+    Returns:
+        Tensor: Census loss mean value.
+    """
+    census_image_a_bchw = census_transform(image_a_bchw, patch_size)
+    census_image_b_bchw = census_transform(image_b_bchw, patch_size)
+    hamming_bchw = soft_hamming(census_image_a_bchw, census_image_b_bchw)
+    # Set borders of the mask to zero to ignore edge effects.
+    padded_mask_bchw = zero_mask_border(mask_bchw, patch_size)
+    diff = distance_metric_fn(hamming_bchw)
+    diff *= padded_mask_bchw
+    loss_mean = torch.sum(diff) / (torch.sum(padded_mask_bchw) + 1e-6)
+    return loss_mean

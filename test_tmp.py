@@ -1,9 +1,9 @@
 import torch
 import time
-
+import torch.nn as nn
 import numpy as np
 import torchvision.transforms as transforms
-
+'''
 resize = {}
 b = 64
 h = 192
@@ -52,4 +52,28 @@ if __name__ == "__main__":
     print("delt_1: ", sum1/n)
     print("delt_2: ", sum2/n)
     
+
+'''
+torch.manual_seed(0)
+
+class Net(nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        
+        self.conv1 = nn.Conv2d(1, 1, 3, 1, 1)
+        print("======================= \n", self.conv1.weight)
+        # nn.init.constant_(self.conv1.weight, 1)
+        # print(self.conv1.weight)
+        nn.init.kaiming_normal_(self.conv1.weight)
+        print(self.conv1.weight)
+        nn.init.kaiming_uniform_(self.conv1.weight)
+        print(self.conv1.weight)
     
+    
+    def forward(self, x):
+        
+        return x
+    
+ 
+if __name__ == "__main__":
+    net = Net()

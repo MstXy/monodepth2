@@ -184,6 +184,11 @@ class MonodepthOptions:
                                  type=float,
                                  help="scales used in the loss",
                                  default=[0.85, 0.85, 0.85, 0.85])
+        self.parser.add_argument("--loss_ternary_w",
+                                    nargs="+",
+                                    type=float,
+                                    help="scales used in the loss",
+                                    default=[1, 1, 0, 0])
         
         
         
@@ -206,6 +211,11 @@ class MonodepthOptions:
                                  help="number of resnet layers",
                                  default=18,
                                  choices=[18, 34, 50, 101, 152])
+        
+        self.parser.add_argument("--warmup_steps",
+                                 type=int,
+                                 help="number of warmup steps",
+                                 default=0)
 
         
 

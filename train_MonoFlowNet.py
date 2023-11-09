@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+
 import torchvision.transforms as transforms
 import torchvision.utils as tvu
 import torchvision.transforms.functional as F
@@ -41,6 +42,7 @@ from monodepth2.networks.UnFlowNet import UnFlowNet
 from monodepth2.networks.ARFlow_models.pwclite import PWCLite
 from monodepth2.networks.pwc_decoder_ori import PWCDecoder_from_img
 from monodepth2.networks.ARFlow_models.pwclite_withResNet import PWCLiteWithResNet
+from monodepth2.networks.ARFlow_models.pwclite_withResNet import PWCLiteFromImg
 from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
 opt = options.parse()
@@ -235,7 +237,7 @@ class MonoFlowLoss():
         flow_loss["smo_loss_o2"] = smo_loss_o2
         return flow_loss, img1_warped, img2_warped, occ_1_2, occ_2_1
 
-    def compute_losses(self, inputs, outputs):
+    def compute_losses(self, inputs, outputs, star_occ=False):
         self.generate_images_pred(inputs, outputs)
         """Compute the reprojection and smoothness losses for a minibatch
         """
@@ -244,7 +246,6 @@ class MonoFlowLoss():
         total_loss = 0
         if self.opt.optical_flow:
             if self.opt.loss_type == 'arloss':
-                
                 for idx_pair in self.idx_pair_list:
                     pyramid_flows = []
                     for scale in self.opt.scales:
@@ -255,15 +256,20 @@ class MonoFlowLoss():
                             )
                     target = torch.cat((inputs['color_aug', idx_pair[0], 0], inputs['color_aug', idx_pair[1], 0]), dim=1)
                 
-                    flow_loss, l_ph_pyramid, l_sm_pyramid, flow_mean, pyramid_occ_mask1, pyramid_occ_mask2, \
-                        pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target)
+                    flow_loss, occ_loss, l_ph_pyramid, pyramid_l1_losses, pyramid_ssim_losses, pyramid_ternary_losses, \
+                    l_sm_pyramid, flow_mean, \
+                    pyramid_smooth_loss_vis, pyramid_photo_loss_vis, \
+                    pyramid_occ_mask1, pyramid_occ_mask2, \
+                        pyramid_im1_recons, pyramid_im2_recons = self.arflow_loss(pyramid_flows, target, star_occ)
                     losses['flow_loss'] += flow_loss
-                
+                    
                 for scale in self.opt.scales:
+                    losses['occ_loss', scale] = occ_loss
                     losses['smo_loss_o1', scale] = l_sm_pyramid[scale]
                     losses['smo_loss_o2', scale] = l_sm_pyramid[scale]
-                    losses['photo_loss_l1', scale] = l_ph_pyramid[scale]
-                    losses['photo_loss_ssim', scale] = l_ph_pyramid[scale]
+                    losses['photo_loss_l1', scale] = pyramid_l1_losses[scale]
+                    losses['photo_loss_ssim', scale] = pyramid_ssim_losses[scale]
+                    losses['photo_loss_ternary', scale] = pyramid_ternary_losses[scale]
                     
                 for scale in self.opt.scales:
                     for idx_pair in self.idx_pair_list:
@@ -271,6 +277,9 @@ class MonoFlowLoss():
                         outputs[('f_warped', idx_pair[1], idx_pair[0], scale)] = pyramid_im2_recons[scale]   # curr_img warped by prev_img and flow_curr_to_prev
                         outputs[('occ', idx_pair[0], idx_pair[1], scale)] = pyramid_occ_mask1[scale]
                         outputs[('occ', idx_pair[1], idx_pair[0], scale)] = pyramid_occ_mask2[scale]
+                        outputs[('smoth_Loss_vis', idx_pair[0], idx_pair[1], scale)] = pyramid_smooth_loss_vis[scale]
+                        outputs[('photo_Loss_vis', idx_pair[0], idx_pair[1], scale)] = pyramid_photo_loss_vis[scale]
+                        
             else:
                 # compute flow losses, warp img, calculate occ map
                 for scale in self.opt.scales:
@@ -622,7 +631,6 @@ def prepare_dataloader(dataset):
 
 
 class DDP_Trainer():
-    
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
         self.opt = opt
         self.gpu_id = torch.cuda.current_device() if opt.ddp else gpu_id
@@ -695,8 +703,11 @@ class DDP_Trainer():
             self.model = PWCLite(self.cfg.model).to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "PWC_from_img":
             self.model = PWCDecoder_from_img()
+            
+        elif self.opt.model_name == "PWC_Lite_from_img":
+            self.model = PWCLiteFromImg().to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name =="PWC_lite_resnet":
-            self.model = PWCLiteWithResNet(self.cfg.model).to('cuda:' + str(self.gpu_id))
+            self.model = PWCLiteWithResNet().to('cuda:' + str(self.gpu_id))
         else:
             raise NotImplementedError
         
@@ -705,25 +716,25 @@ class DDP_Trainer():
             self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
-            
+        self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
         if self.opt.load_weights_folder is not None:
             self.load_ddp_model()
             
         
-        if opt.freeze_Resnet:
-            paras = []
-            for name, param in self.ddp_model.named_parameters():
-                if 'ResEncoder' in name:
+        # if opt.freeze_Resnet:
+        #     paras = []
+        #     for name, param in self.ddp_model.named_parameters():
+        #         if 'ResEncoder' in name:
 
-                    param.requires_grad = False
-                elif 'FlowDecoder' in name:
-                    paras.append(param)
-                    param.requires_grad = True
-                else:
-                    raise NotImplementedError
-            self.model_optimizer = optim.Adam(paras, self.opt.learning_rate)
-        else:
-            self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
+        #             param.requires_grad = False
+        #         elif 'FlowDecoder' in name:
+        #             paras.append(param)
+        #             param.requires_grad = True
+        #         else:
+        #             raise NotImplementedError
+        #     self.model_optimizer = optim.Adam(paras, self.opt.learning_rate)
+        # else:
+        #     self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
 
         # self.model_lr_scheduler = optim.lr_scheduler.StepLR(self.model_optimizer, self.opt.scheduler_step_size, 0.4)
         self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.model_optimizer,
@@ -747,7 +758,6 @@ class DDP_Trainer():
         self.depth_metric_names = [
             "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
 
-
     def load_ddp_model(self):
         """Load model(s) from disk
         """
@@ -759,9 +769,19 @@ class DDP_Trainer():
         print("loading model from folder {}".format(chechpoint_path))
         
         
-        # Load the model's state_dict
-        self.ddp_model.load_state_dict(
-            torch.load(chechpoint_path, map_location='cpu'))
+        if not opt.ddp:
+            new_state_dict = {}
+            for name, params in torch.load(chechpoint_path, map_location='cpu').items():
+                if 'module' in name:
+                    name = name[7:]
+                new_state_dict[name] = params
+            self.ddp_model.load_state_dict(new_state_dict)
+        
+        
+        else:
+            # Load the model's state_dict
+            self.ddp_model.load_state_dict(
+                torch.load(chechpoint_path, map_location='cpu'))
         
 
         # loading adam state
@@ -800,8 +820,9 @@ class DDP_Trainer():
         """Write an event to the tensorboard events file
         """
         writer = self.writers[mode]
+        writer.add_scalar("learning_rate", self.model_optimizer.param_groups[0]['lr'], self.step)
         for l, v in losses.items():
-            if isinstance(l, tuple) and l[0] in ['smo_loss_o1', 'smo_loss_o2', 'photo_loss_l1', 'photo_loss_ssim']:
+            if isinstance(l, tuple) and l[0] in ['smo_loss_o1', 'smo_loss_o2', 'photo_loss_l1', 'photo_loss_ssim','occ_loss', 'photo_loss_ternary']:
                 continue
             else:
                 writer.add_scalar("{}".format(l), v, self.step)
@@ -814,20 +835,33 @@ class DDP_Trainer():
             writer.add_scalar("smo_loss_o2/scale{}".format(scale), losses["smo_loss_o2", scale], self.step)
             writer.add_scalar("photo_loss_l1/scale{}".format(scale), losses["photo_loss_l1", scale], self.step)
             writer.add_scalar("photo_loss_ssim/scale{}".format(scale), losses["photo_loss_ssim", scale], self.step)
+            writer.add_scalar("occ_loss/scale{}".format(scale), losses["occ_loss", scale], self.step)
+            writer.add_scalar("photo_loss_ternary/scale{}".format(scale), losses["photo_loss_ternary", scale], self.step)
 
 
-        for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
+        # for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
+            
             if self.opt.optical_flow is not None:
                 for idx_pair in self.idx_pair_list:
                     # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
-                    img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1], j)
+                    img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1],j=0, scale=scale)
                     # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
-                    img1_warped_img1_diff = mono_utils.log_vis_2(inputs, outputs, idx_pair[0], idx_pair[1], j)
+                    img1_warped_img1_diff = mono_utils.log_vis_2(inputs, outputs, idx_pair[0], idx_pair[1],j=0, scale=scale)
                     writer.add_image('1.Img2__2.OccImg1->Img2__3.FlowImg1->Img2__4.Img1.__IdxPair{},{}/{}'.
-                                     format(idx_pair[0], idx_pair[1], j),img1_img2_flow, self.step)
+                                     format(idx_pair[0], idx_pair[1], scale),img1_img2_flow, self.step)
                     writer.add_image('1.Diff__2.DiffMasked__3.WarpedImg1__4.SourceImg1__5.FlowImg1->Img2__IdxPair{},{}/{}'.
-                                     format(idx_pair[0], idx_pair[1], j), img1_warped_img1_diff, self.step)
-
+                                     format(idx_pair[0], idx_pair[1], scale), img1_warped_img1_diff, self.step)
+                    writer.add_image('photoVis_{},{}/{}'.format(idx_pair[0], idx_pair[1], scale),
+                                     transforms.functional.pil_to_tensor(
+                                         outputs[('photo_Loss_vis', idx_pair[0], idx_pair[1], scale)]
+                                     ), 
+                                     self.step)
+                    writer.add_image('smothVis_{},{}/{}'.format(idx_pair[0], idx_pair[1], scale),
+                                    transforms.functional.pil_to_tensor(
+                                        outputs[('smoth_Loss_vis', idx_pair[0], idx_pair[1], scale)]
+                                    ), 
+                                        self.step)
+                    
             if self.opt.depth_branch:
                 for s in self.opt.scales:
                     for frame_id in self.opt.frame_ids:
@@ -929,12 +963,9 @@ class DDP_Trainer():
                         elif len(self.opt.frame_ids)==2:
                             input[("color_aug", -1, 0)], input[("color_aug", 0, 0)] = image1, image2
                             
-                        if opt.model_name=="PWC_from_img":
-                            out_dict = self.ddp_model(image1, image2)
-                            flow_1_2 = out_dict['level0'][0]
-                        else:
-                            out_dict = self.ddp_model(input)
-                            flow_1_2 = out_dict['flow', -1, 0, 0][0]
+
+                        out_dict = self.ddp_model(input)
+                        flow_1_2 = out_dict['flow', -1, 0, 0][0]
                     flow = padder.unpad(flow_1_2).cpu()
                     epe = torch.sum((flow - flow_gt)**2, dim=0).sqrt()
                     mag = torch.sum(flow_gt**2, dim=0).sqrt()
@@ -1033,12 +1064,9 @@ class DDP_Trainer():
                         elif len(self.opt.frame_ids)==2:
                             input[("color_aug", -1, 0)], input[("color_aug", 0, 0)] = image1, image2
                             
-                        if opt.model_name=="PWC_from_img":
-                            out_dict = self.ddp_model(image1, image2)
-                            flow_1_2 = out_dict['level0'][0]
-                        else:
-                            out_dict = self.ddp_model(input)
-                            flow_1_2 = out_dict['flow', -1, 0, 0][0]
+
+                        out_dict = self.ddp_model(input)
+                        flow_1_2 = out_dict['flow', -1, 0, 0][0]
                             
                     # flow = padder.unpad(flow_1_2).cpu()
                     flow_1_2[0, :, :] = flow_1_2[0, :, :] / self.opt.width * W
@@ -1197,10 +1225,8 @@ class DDP_Trainer():
         self.model_optimizer.zero_grad()
         
         self.preprocess(inputs)
-        if self.opt.model_name == "PWC_from_img":
-            outputs = self.calculate_pwc_outdict(inputs)
-        else:
-            outputs = self.ddp_model(inputs)
+
+        outputs = self.ddp_model(inputs)
 
         return outputs
 
@@ -1213,15 +1239,56 @@ class DDP_Trainer():
                 inputs[key] = ipt.to(self.gpu_id)            
             start_batch_time = time.time()
             outputs = self._run_batch(inputs=inputs)
-            losses = self.mono_loss.compute_losses(inputs, outputs)
+            
+            
+            self.model_optimizer.zero_grad()
+            losses = self.mono_loss.compute_losses(inputs, outputs, star_occ=opt.flow_occ_check)
+            
+            
+            # Nan check
+            for n, p in self.ddp_model.named_parameters():
+                if torch.isnan(p).sum() > 0:
+                    print(n, p)
+                    print("Nan in parameters!")
+                    import sys
+                    sys.exit()
+            
+            if(torch.isnan(losses['loss']).sum()>0):
+                for k,v in losses.items():
+                    print(k, v)
+                print("Nan losses!")
+                import sys
+                sys.exit()
+            # torch.nn.utils.clip_grad_value_(self.ddp_model.parameters(), 10.05)
+            # print("max of loss", torch.max(losses['loss']))
             losses['loss'].backward()
+            
+            
+
+            # grad_list = []
+            # for name, params in self.ddp_model.named_parameters():
+            #     if params.requires_grad and params.grad:
+            #         grad_list.append(params.grad.data.cpu().detach().numpy())
+            #         # print("name: ", name, "max grad: ", torch.max(params.grad))
+            # # grad_list = [torch.max(x.grad).cpu().detach().numpy() for _, x in self.ddp_model.named_parameters() if x.requires_grad]  
+            # print("Maximum Gradient: ", max(grad_list))
+
+            
             self.model_optimizer.step()
+            
+            # ======= warmup
+            if opt.warmup_steps > 0:
+                if self.step < opt.warmup_steps:
+                    self.model_optimizer.param_groups[0]['lr'] = self.opt.learning_rate * (self.step+1) / opt.warmup_steps
+                    
 
             # ===== log
             early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 4000 and not self.opt.debug and self.is_master_node
             late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
             if early_phase or late_phase:
                 print("logging batch_idx:", batch_idx)
+                if opt.warmup_steps > 0 and self.step < opt.warmup_steps:
+                    print('lr adjust to ', self.model_optimizer.param_groups[0]['lr'] )
                 self.log_time(batch_idx, time.time() - start_batch_time, losses)
                 self.log("train", inputs, outputs, losses)
             self.step += 1
@@ -1236,6 +1303,9 @@ class DDP_Trainer():
         #     self.eval_depth_flow()
         for epoch in range(self.opt.start_epoch, self.opt.num_epochs):
             self.epoch = epoch
+            if self.epoch >= self.opt.occ_start_epoch:
+                opt.flow_occ_check = True
+            
             if opt.ddp:
                 self.train_loader.sampler.set_epoch(epoch)
                         
@@ -1244,13 +1314,8 @@ class DDP_Trainer():
                     self.arflow_loss.cfg.update(self.cfg.train.stage1.loss)
                     print('\n ==========update loss function to stage1 loss========== \n')
                     
-            if self.epoch > self.opt.occ_start_epoch:
-                opt.flow_occ_check = True
-            
-            if self.epoch == 1:
-                for g in self.model_optimizer.param_groups:
-                    g['lr'] = g['lr'] * 0.7
-                    print('lr decay to ', g['lr'])
+
+
             self._run_epoch()
             self.model_lr_scheduler.step()
             if (self.epoch + 1) % self.opt.save_frequency == 0 and self.is_master_node:

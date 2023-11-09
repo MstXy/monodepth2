@@ -12,7 +12,7 @@
               "hflip": true,
               "swap": true},
  "loss": {"alpha": 10,
-          "occ_from_back": true,
+          "occ_from_back": false,
           "type": "unflow",
           "w_l1": 0.15,
           "w_scales": [1.0, 1.0, 1.0, 1.0, 0.0],

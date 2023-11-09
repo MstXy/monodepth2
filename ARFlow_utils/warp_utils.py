@@ -81,11 +81,20 @@ def get_corresponding_map(data):
 
 
 def flow_warp(x, flow12, pad='border', mode='bilinear'):
-    B, _, H, W = x.size()
+    try:
+        B, _, H, W = x.size()
 
-    base_grid = mesh_grid(B, H, W).type_as(x)  # B2HW
+        base_grid = mesh_grid(B, H, W).type_as(x)  # B2HW
 
-    v_grid = norm_grid(base_grid + flow12)  # BHW2
+        v_grid = norm_grid(base_grid + flow12)  # BHW2
+    except Exception as e:
+        print("B, H, W", B, H, W)
+        print("max of x", torch.max(x))
+        print("x.size()", x.size())
+        print("flow12.size()", flow12.size())
+        raise ValueError("Error in flow_warp")
+    
+    
     if 'align_corners' in inspect.getfullargspec(torch.nn.functional.grid_sample).args:
         im1_recons = nn.functional.grid_sample(x, v_grid, mode=mode, padding_mode=pad, align_corners=True)
     else:
@@ -100,11 +109,15 @@ def get_occu_mask_bidirection(flow12, flow21, scale=0.01, bias=0.5):
           (flow21_warped * flow21_warped).sum(1, keepdim=True)
     occ_thresh = scale * mag + bias
     occ = (flow12_diff * flow12_diff).sum(1, keepdim=True) > occ_thresh
+    
+    # testtemp occ with grad
+    # occ = torch.nn.functional.sigmoid((flow12_diff * flow12_diff).sum(1, keepdim=True) - occ_thresh)
     return occ.float()
 
 
 def get_occu_mask_backward(flow21, th=0.2):
     B, _, H, W = flow21.size()
+    # print("torch.max(flow21)", torch.max(flow21))
     base_grid = mesh_grid(B, H, W).type_as(flow21)  # B2HW
 
     corr_map = get_corresponding_map(base_grid + flow21)  # BHW

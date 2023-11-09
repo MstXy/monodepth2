@@ -97,5 +97,5 @@ def smooth_grad_2nd(flo, image, alpha):
     loss_x = weights_x[:, :, :, 1:] * dx2.abs()
     loss_y = weights_y[:, :, 1:, :] * dy2.abs()
 
-    return loss_x.mean() / 2. + loss_y.mean() / 2.
+    return loss_x, loss_y
 
