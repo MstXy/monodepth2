@@ -8,6 +8,7 @@ sys.path.append(parent_project)
 import torch
 import torch.nn as nn
 import monodepth2.networks as networks
+from monodepth2.networks.raft.raft import RAFT
 from monodepth2.layers import *
 import monodepth2.utils.utils as mono_utils
 from monodepth2.options import MonodepthOptions
@@ -160,6 +161,18 @@ class MonoFlowNet(nn.Module):
             # features2 = [self.Encoder(img) for img in imgs]
             outputs = self.FlowDecoder(imgs, in_feat)
             return outputs
+        
+        elif self.opt.optical_flow in ["raft",]:
+            for (img1_idx, img2_idx) in idx_pair_list:
+                img_pair = [inputs["color_aug", img1_idx, 0], inputs["color_aug", img2_idx, 0]]
+                features_pair = [features[img1_idx][1], features[img2_idx][1]]
+                out_1 = self.FlowDecoder(img_pair, features_pair)
+                out_2 = self.FlowDecoder(img_pair[::-1], features_pair[::-1])
+                
+                for iter in range(self.opt.raft_iter):
+                    outputs[('flow', img1_idx, img2_idx, iter)] = out_1[iter]
+                    outputs[('flow', img2_idx, img1_idx, iter)] = out_2[iter]
+            return outputs
             
             
     def predict_poses(self, inputs, features):
@@ -256,26 +269,6 @@ class MonoFlowNet(nn.Module):
                 upsample_module_in_channels=usmc[0],
                 upsample_module_out_channels=[512, 256, 128, 64, 64, 32]
             )
-
-            # FlowNet = networks.FlowNetCDecoder(
-            #     in_channels=dict(level6=1024, level5=1026, level4=770, level3=386, level2=130),
-            #     out_channels=dict(level6=512, level5=256, level4=128, level3=64),
-            #     deconv_bias=True,
-            #     pred_bias=True,
-            #     upsample_bias=True,
-            #     norm_cfg=None,
-            #     act_cfg=dict(type='LeakyReLU', negative_slope=0.1),
-            #     init_cfg=[
-            #         dict(
-            #             type='Kaiming',
-            #             layer=['Conv2d', 'ConvTranspose2d'],
-            #             a=0.1,
-            #             mode='fan_in',
-            #             nonlinearity='leaky_relu',
-            #             bias=0),
-            #         dict(type='Constant', layer='BatchNorm2d', val=1, bias=0)
-            #     ])
-
             return Corr, FlowNet
 
         elif self.opt.optical_flow in ["upflow", ]:
@@ -301,6 +294,9 @@ class MonoFlowNet(nn.Module):
 
         elif self.opt.optical_flow in ["arflow", ]:
             return None, networks.PWCLiteWithResNet().to(self.device)
+        
+        elif self.opt.optical_flow in ["raft",]:
+            return None, RAFT(self.opt)
         
         else: 
             raise NotImplementedError

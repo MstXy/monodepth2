@@ -352,7 +352,9 @@ class PWCDecoder_from_img(nn.Module):
                                 conv(96, 32, kernel_size=1, stride=1, dilation=1),
                                 conv(64, 32, kernel_size=1, stride=1, dilation=1),
                                 conv(32, 32, kernel_size=1, stride=1, dilation=1)])
-        self.flow_estimator = FlowEstimatorReduce(ch_in=32 + 81 + 2)
+        self.flow_estimator = nn.ModuleList()
+        for i in range(4):
+            self.flow_estimator.append(FlowEstimatorReduce(ch_in=32 + 81 + 2))
         self.context_net =  nn.Sequential(
             conv(32+2, 128, 3, 1, 1),
             conv(128, 128, 3, 1, 2),
@@ -362,6 +364,7 @@ class PWCDecoder_from_img(nn.Module):
             conv(64, 32, 3, 1, 1),
             conv(32, 2, isReLU=False)
         )
+        self.drop = nn.Dropout2d(0.1)
         
     def warp(self, x, flo):
         """
@@ -412,6 +415,11 @@ class PWCDecoder_from_img(nn.Module):
         else:
             raise NotImplementedError
         
+
+        for img in imgs:
+            img = img * img - 1 # normalize to [-1, 1]
+        
+        
         x = [self.feature_pyramid_extractor(img) + [img] for img in imgs]
         # x = []
         # x.append(self.feature_pyramid_extractor_simple(imgs[0]))
@@ -456,7 +464,6 @@ class PWCDecoder_from_img(nn.Module):
         return out
     
 
-        
     def forward_2_frames(self, x1_pyramid, x2_pyramid):
         # outputs
         flows = []
@@ -476,15 +483,21 @@ class PWCDecoder_from_img(nn.Module):
                 flow = F.interpolate(flow * 2, scale_factor=2,
                                      mode='bilinear', align_corners=True)
                 x2_warp = flow_warp(x2, flow)
-
+                
             # correlation
-            out_corr = self.corr_block(x1, x2_warp)
+            # feature normalization between x1 and x2_warp
+            x1_normed, x2_warp_normed = self.normalize_features(x1, x2_warp)
+            out_corr = self.corr_block(x1_normed, x2_warp_normed)
             out_corr_relu = self.leakyRELU(out_corr)
 
             # concat and estimate flow
             x1_1by1 = self.conv_1x1[l](x1)
-            x_intm, flow_res = self.flow_estimator(
+            x_intm, flow_res = self.flow_estimator[l](
                 torch.cat([out_corr_relu, x1_1by1, flow], dim=1))
+
+            if self.training:
+                flow_res = self.drop(flow_res)
+                x_intm = self.drop(x_intm)
             flow_2 = flow + flow_res
 
             flow_fine = self.context_net(torch.cat([x_intm, flow_2], dim=1))
@@ -500,7 +513,17 @@ class PWCDecoder_from_img(nn.Module):
                                    mode='bilinear', align_corners=True) for flow in flows]
         return flows[::-1]
 
+    
+    def normalize_features(self, feat1, feat2_warped):
+        std1, mean1 = torch.std_mean(feat1, dim=[1, 2, 3], keepdim=True)
+        std2, mean2 = torch.std_mean(feat1, dim=[1, 2, 3], keepdim=True)
+        std, mean = torch.mean(std1 + std2) / 2 + 1e-6, torch.mean(mean1 + mean2) / 2
         
+        feat1_norm = (feat1 - mean) / std
+        feat2_norm = (feat2_warped - mean) / std
+        return feat1_norm, feat2_norm
+    
+    
     def forward_2_frambackup(self, im1, im2):
         
         c10 = im1

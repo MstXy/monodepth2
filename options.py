@@ -79,8 +79,37 @@ class MonodepthOptions:
                                  help="predict depth or not",
                                  default='False')
         
+        self.parser.add_argument("--dropout",
+                                 type=float,
+                                 default=0.0,
+                                 help="dropout rate, less than 1")
         
+        self.parser.add_argument("--small_raft",
+                                 type=str2bool,
+                                 default='True',
+                                 help="whether use small raft")
         
+        self.parser.add_argument("--corr_radius",
+                                 default=4,
+                                 type=int,
+                                 help="correlation radius for cost volume(currently only controll raft)")
+        # todo: corr_radius for other models
+        
+        self.parser.add_argument("--mixed_precision",
+                                 type=str2bool,
+                                 default='False',
+                                 help="whether use mixed precision(currently only controll raft)")
+        # todo: mixed_precision controll for other models besides raft
+        
+        self.parser.add_argument("--alternate_corr",
+                                 type=str2bool,
+                                 default='False',
+                                 help="whether use alternate correlation(for smaller computational complexity, refer to raft paper)")
+        
+        self.parser.add_argument("--raft_iter",
+                                 default=6,
+                                 type=int,
+                                 help="raft iteration number")
         
         
         self.parser.add_argument("--val_dataset",
@@ -114,9 +143,9 @@ class MonodepthOptions:
 
         # ==== ddp settings
         self.parser.add_argument("--ddp",
-                                 type=bool,
+                                 type=str2bool,
                                  help='whether use ddp',
-                                 default=False)
+                                 default="False")
         
         self.parser.add_argument("--cuda_visible_devices",
                                 type=str,
@@ -140,6 +169,12 @@ class MonodepthOptions:
                                  type=float,
                                  help="learning rate",
                                  default=1e-4)
+        self.parser.add_argument("--lr_scheduler", 
+                                 type=str,
+                                 help="lr scheduler",
+                                 default="cosine",
+                                 choices=["cosine", "step", "exp"])
+        
         self.parser.add_argument("--start_epoch",
                                  type=int,
                                  help="start_epoch",
@@ -151,7 +186,7 @@ class MonodepthOptions:
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
-                                 default=15)
+                                 default=100)
         
         
         # LOSS WEIGHTS

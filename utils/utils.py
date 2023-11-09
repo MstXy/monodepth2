@@ -207,6 +207,9 @@ def torch_warp(img2, flow):
     img1_warped = F.grid_sample(img2, img2_coor.permute(0, 2, 3, 1),  # (B, H, W, C)
                                 padding_mode="zeros",
                                 align_corners=True)
+    
+    # print("==========torch.max(torch.abs(flow))", torch.max(torch.abs(flow)))
+    # print("==========torch.max(torch.abs(img1_warped))", torch.max(torch.abs(img1_warped)))
     return img1_warped
 
 
@@ -305,7 +308,8 @@ def tensor_to_pil(input_tensor):
 def flow_to_pil(flow_to_vis, to_pil=True):
 
     flow_to_vis_dup = flow_to_vis.permute(1, 2, 0).clone().detach().cpu().numpy()
-    flow_to_vis_dup = flow_to_vis_dup / np.max(flow_to_vis_dup) * 255
+    flow_to_vis_dup = flow_to_vis_dup / np.max(np.abs(flow_to_vis_dup) + 1e-5) * 255
+    flow_to_vis_dup = flow_to_vis_dup * 2 # for better visualization
     vis_flow = torch.from_numpy(
         flow_vis.flow_to_color(flow_to_vis_dup,
                                convert_to_bgr=False)).permute(2, 0, 1)
@@ -393,7 +397,7 @@ def upsample2d_flow_as(inputs, target_as, mode="bilinear", if_rate=False):
     return res
 
 
-def log_vis_1(inputs, outputs, img1_idx, img2_idx, j, scale=0):
+def log_vis_1(inputs, outputs, img1_idx, img2_idx, j, scale=0, raft=False):
     ''' top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
     Args:
         img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
@@ -401,22 +405,22 @@ def log_vis_1(inputs, outputs, img1_idx, img2_idx, j, scale=0):
     '''
     img_1_img_2_and_flow = torchvision.transforms.functional.pil_to_tensor(
         stitching_and_show(img_list=[
-            inputs['color_aug', img2_idx, scale][j],  # curr
+            inputs['color_aug', img2_idx, 0 if raft else scale][j],  # curr
             outputs[('occ', img1_idx, img2_idx, scale)][j].repeat(3, 1, 1),  # occ_prev_curr
             # occ_dict[(img2_idx, img1_idx)][j].repeat(3, 1, 1),  # occ_curr_prev
             outputs[('flow', img1_idx, img2_idx, scale)][j],  # flow_prev_curr(img2_idx=0); flow_curr_next(img2_idx=1)
             # outputs['flow_bwd'][img2_idx][j],  # flow_curr_prev
-            inputs['color_aug', img1_idx, scale][j] # prev
+            inputs['color_aug', img1_idx, 0 if raft else scale][j] # prev
         ], ver=True, show=False))
     return img_1_img_2_and_flow
 
-def log_vis_2(inputs, outputs, img1_idx, img2_idx, j, scale=0):
+def log_vis_2(inputs, outputs, img1_idx, img2_idx, j, scale=0, raft=False):
     ''' diff(target, source), diff * mask, warped, source, flow_img1_img2
     Args:
         img1_idx, img2_idx: (-1,0): prev_and_curr; (0,1) curr_and_next
         j: the j th img in batch
     '''
-    diff = img_diff_show(outputs[('f_warped', img1_idx, img2_idx, scale)][j], inputs['color_aug', img1_idx, scale][j])
+    diff = img_diff_show(outputs[('f_warped', img1_idx, img2_idx, scale)][j], inputs['color_aug', img1_idx, 0 if raft else scale][j])
     diff_mask = diff * outputs[('occ', img1_idx, img2_idx, scale)][j].repeat(3, 1, 1)
     aa = outputs[('f_warped', img1_idx, img2_idx, scale)][j]
     source = inputs['color_aug', img1_idx, 0][j]
@@ -469,7 +473,7 @@ def create_mask(tensor, paddings):
 
 def create_border_mask(tensor, border_ratio=0.1):
     num_batch, _, height, width = tensor.shape
-    sz = np.ceil(height * border_ratio).astype(np.int).item(0)
+    sz = np.ceil(height * border_ratio).astype(np.int32).item(0)
     border_mask = create_mask(tensor, [[sz, sz], [sz, sz]])
     return border_mask.detach()
 
