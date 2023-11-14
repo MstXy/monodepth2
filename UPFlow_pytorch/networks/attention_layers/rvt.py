@@ -210,7 +210,7 @@ def window_partition(x, window_size: Tuple[int, int]):
     assert(H % window_size[0] == 0, f'height ({H}) must be divisible by window ({window_size[0]})')
     assert(W % window_size[1] == 0, f'width ({W}) must be divisible by window ({window_size[1]})')
     
-    print(f'window_partition: B={B}, H={H}, W={W}, C={C}, window_size={window_size}')
+    # print(f'window_partition: B={B}, H={H}, W={W}, C={C}, window_size={window_size}')
     x = x.view(B, H // window_size[0], window_size[0], W // window_size[1], window_size[1], C)
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size[0], window_size[1], C)
     return windows

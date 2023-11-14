@@ -288,8 +288,14 @@ class PWCLiteWithResNet(nn.Module):
         # imgs = [x[:, 3 * i: 3 * i + 3] for i in range(int(n_frames))]
         # x = [self.feature_pyramid_extractor(img) + [img] for img in imgs]
 
-    def forward(self, imgs, features, with_bk=True):
-        # features: [0, -1, 1]
+    def forward(self, imgs, features, frame_ids:list[int]=None, with_bk=True):
+        '''
+        params:
+            frame_ids: list of frame ids used only when n_frames=2, e.g. [-1, 0] or [0, 1], 
+                already assert that frame_ids[0] < frame_ids[1]
+            # images: [-1, 0, 1] or [-1, 0] or [0, 1]
+            # features: [-1, 0, 1] or [-1, 0] or [0, 1]
+        '''
         outdict = {}
         x = []
         for i, img in enumerate(imgs):
@@ -301,27 +307,27 @@ class PWCLiteWithResNet(nn.Module):
 
         res_dict = {}
         if n_frames == 2:
-            res_dict['flows_fw'] = self.forward_2_frames(x[1], x[0])
+            res_dict['flows_fw'] = self.forward_2_frames(x[0], x[1])
             if with_bk:
-                res_dict['flows_bw'] = self.forward_2_frames(x[0], x[1])
+                res_dict['flows_bw'] = self.forward_2_frames(x[1], x[0])
                 for i in range(4):
-                    outdict[('flow', -1, 0, i)] =  res_dict['flows_fw'][i]
-                    outdict[('flow', 0, -1, i)] =  res_dict['flows_bw'][i]
+                    outdict[('flow', frame_ids[0], frame_ids[1], i)] =  res_dict['flows_fw'][i]
+                    outdict[('flow', frame_ids[1], frame_ids[0], i)] =  res_dict['flows_bw'][i]
+        
         elif n_frames == 3:
             # flows_10, flows_12 = self.forward_3_frames(x[1], x[0], x[2]) # original is 0, 1, 2
             # res_dict['flows_fw'], res_dict['flows_bw'] = flows_12, flows_10
-            
-            
-            tmp1 = self.forward_2_frames(x[1], x[0])
-            tmp2 = self.forward_2_frames(x[0], x[1])
-            tmp3 = self.forward_2_frames(x[2], x[0])
-            tmp4 = self.forward_2_frames(x[0], x[2])
+            tmp1 = self.forward_2_frames(x[0], x[1])
+            tmp2 = self.forward_2_frames(x[1], x[0])
+            tmp3 = self.forward_2_frames(x[2], x[1])
+            tmp4 = self.forward_2_frames(x[1], x[2])
             
             for i in range(4):
                 outdict[('flow', -1, 0, i)] =  tmp1[i]
                 outdict[('flow', 0, -1, i)] =  tmp2[i]
                 outdict[('flow', 1, 0, i)] =  tmp3[i]
                 outdict[('flow', 0, 1, i)] =  tmp4[i]
+
 
         elif n_frames == 5:
             flows_10, flows_12 = self.forward_3_frames(x[0], x[1], x[2])
@@ -334,8 +340,6 @@ class PWCLiteWithResNet(nn.Module):
             raise NotImplementedError
         
 
-
-        
         return outdict
 
 

@@ -18,7 +18,7 @@ class MonodepthOptions:
     def __init__(self):
         self.parser = argparse.ArgumentParser(description="Monodepthv2 options")
 
-        # PATHS
+        # ============PATHS
         self.parser.add_argument("--train_dataset",
                                  type=str,
                                  help="dataset to train on",
@@ -58,7 +58,7 @@ class MonodepthOptions:
                                  default='/mnt/km-nfs/ns100002-share/data_scene_flow')
         
 
-        # Model Arch ----------------
+        # =============Model Arch 
         self.parser.add_argument("--encoder",
                                  type=str,
                                  help="alternative encoder choices",
@@ -123,7 +123,7 @@ class MonodepthOptions:
                                     help="freeze Resnet",
                                     default='False')
         
-        # LOADING options
+        # ===================LOADING options
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
                                  help="name of model to load",
@@ -140,6 +140,60 @@ class MonodepthOptions:
                                  type=str,
                                  help="the name of the folder to save the model in",
                                  default="MonoFlowNet")  # MonoFlowNet or UnFlowNet
+        
+        # ================ flow self-supervision augmentation options
+        self.parser.add_argument("--atst_start_epoch",
+                                type=int,
+                                help="When to run ATST",
+                                default=None)
+        self.parser.add_argument("--atst_weights",
+                                 type=float,
+                                 default=0.02,
+                                 help="weights for ATST")
+        
+        self.parser.add_argument("--run_ot",
+                                type=str2bool,
+                                help="Whether to run OT",
+                                default=False)
+        self.parser.add_argument("--run_st",
+                                type=str2bool,
+                                help="Whether to run ST",
+                                default=True)
+        self.parser.add_argument("--st_add_noise",
+                                type=str2bool,
+                                help="Whether to add noise in spatial transformer",
+                                default=True)
+        self.parser.add_argument("--st_hflip",
+                                type=str2bool,
+                                help="Whether to apply horizontal flip in spatial transformer",
+                                default=True)
+        self.parser.add_argument("--st_rotate",
+                                nargs=4,
+                                type=float,
+                                help="Rotation parameters in spatial transformer",
+                                default=[-0.01, 0.01, -0.01, 0.01])
+        self.parser.add_argument("--st_squeeze",
+                                nargs=4,
+                                type=float,
+                                help="Squeeze parameters in spatial transformer",
+                                default=[1.0, 1.0, 1.0, 1.0])
+        self.parser.add_argument("--st_trans",
+                                nargs=2,
+                                type=float,
+                                help="Translation parameters in spatial transformer",
+                                default=[0.04, 0.005])
+        self.parser.add_argument("--st_vflip",
+                                type=str2bool,
+                                help="Whether to apply vertical flip in spatial transformer",
+                                default=False)
+        self.parser.add_argument("--st_zoom",
+                                nargs=4,
+                                type=float,
+                                help="Zoom parameters in spatial transformer",
+                                default=[1.0, 1.4, 0.99, 1.01])
+
+        
+        
 
         # ==== ddp settings
         self.parser.add_argument("--ddp",
@@ -159,6 +213,11 @@ class MonodepthOptions:
                                  type=int,
                                  help="number of dataloader workers",
                                  default=15)
+        self.parser.add_argument("--load_partial",
+                                 type=str2bool,
+                                 help="load partial model",
+                                 default="False")
+        
 
         # OPTIMIZATION options
         self.parser.add_argument("--batch_size",

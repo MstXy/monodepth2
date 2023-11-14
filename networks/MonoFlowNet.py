@@ -50,25 +50,65 @@ class MonoFlowNet(nn.Module):
 
         if self.opt.optical_flow:
             self.Corr, self.FlowDecoder = self.build_flow_decoder()
+            
+                    
+    def forward(self, inputs, depth_branch=None, optical_flow=None, frame_ids:list[int]=None):
+        '''
+        params:
+            depth_branch/optical_flow: bool, whether to predict_depth / optical_flow, overwrite self.opt.depth_branch / self.opt.optical_flow if assigned
+        frame_ids system: list, frame_ids to predict:
+                    1. overwrite self.opt.frame_ids if assigned,
+                    2. use self.opt.frame_ids if not assigned, 
+                usually used in the case \
+                of two-frame optical flow inference. Cause frame_ids can be defined by argparser or from runtime function \
+                calling (e.g. in flow only inference where only flow_0 to flow_1 is needed).The frame_ids could be of any\
+                order, like[0, -1, 1][-1, 0, 1] or [0, -1],[-1, 0], so first convert them to the right order of time: \
+                [-1, 0, 1]and [-1, 0]or[0,1], and create the corresponding idx_pair_list for optical flow inference.
+                    
+        '''
+        if depth_branch is None:
+            depth_branch = self.opt.depth_branch
+        if optical_flow is None:
+            optical_flow = self.opt.optical_flow
+        if frame_ids is None:
+            frame_ids = self.opt.frame_ids
+
+            
+        if len(frame_ids) == 3:
+            self.idx_pair_list = [(-1, 0), (0, 1)]
+            frame_ids = [-1, 0, 1]
+            
+        elif len(frame_ids) == 2 and sum(frame_ids) == 1:
+            frame_ids=[0, 1]
+            self.idx_pair_list = [frame_ids]
+            
+        elif len(frame_ids) == 2 and sum(frame_ids) == -1:
+            frame_ids=[-1, 0]
+            self.idx_pair_list = [frame_ids]
         
-    def forward(self, inputs):
+        else:
+            print(frame_ids)
+            raise NotImplementedError
+        
+        
+
         outputs = {}
         curr_bs = inputs[("color_aug", 0, 0)].size()[0]
         all_color_aug = torch.cat(
-            [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids])  # all images: ([i-1, i, i+1] * [L, R])
+            [inputs[("color_aug", i, 0)] for i in frame_ids])  # all images: ([i-1, i, i+1] * [L, R])
         all_features = self.Encoder(all_color_aug)
         all_features = [torch.split(f, curr_bs) for f in all_features]  # separate by frame
         
         features = {}
-        for i, k in enumerate(self.opt.frame_ids):
+        for i, k in enumerate(frame_ids):
             features[k] = [f[i] for f in all_features]
-
-        if self.opt.depth_branch:
+        
+        if depth_branch:
             outputs.update(self.DepthDecoder(features[0]))
             outputs.update(self.predict_poses(inputs, features))
 
-        if self.opt.optical_flow:
-            outputs.update(self.predict_flow(inputs, features))
+        if optical_flow:
+            outputs.update(self.predict_flow(inputs, features, frame_ids))
         return outputs
 
     def cal_fwd_flownet(self, feature_1, feature_2):
@@ -107,17 +147,14 @@ class MonoFlowNet(nn.Module):
         output_dict_1_2 = self.FlowDecoder(input_dict_1_2)
         return output_dict_1_2
 
-    def predict_flow(self, inputs, features):
+    def predict_flow(self, inputs, features, frame_ids:list[int]=None):
         outputs = {}
-        if len(self.opt.frame_ids) == 3:
-            idx_pair_list = [(-1, 0), (0, 1)]
-        elif len(self.opt.frame_ids) == 2:
-            idx_pair_list = [(-1, 0)]
-        else:
-            raise NotImplementedError
+
+        assert (frame_ids[0] < frame_ids[1] < frame_ids[2] if len(frame_ids) == 3 else frame_ids[0] < frame_ids[1])
+  
         
         if self.opt.optical_flow in ['flownet', ]:
-            for (img1_idx, img2_idx) in idx_pair_list:
+            for (img1_idx, img2_idx) in self.idx_pair_list:
                 out_1 = self.cal_fwd_flownet(features[img1_idx], features[img2_idx])
                 out_2 = self.cal_fwd_flownet(features[img2_idx], features[img1_idx])
                 for scale in self.opt.scales:
@@ -128,7 +165,7 @@ class MonoFlowNet(nn.Module):
         elif self.opt.optical_flow in ["upflow", ]:
             # todo: DEBUG this part 
             for scale in self.opt.scales:
-                for (img1_idx, img2_idx) in idx_pair_list:
+                for (img1_idx, img2_idx) in self.idx_pair_list:
                     out_fwd = self.cal_fwd_upflow(
                         features[img1_idx], features[img2_idx], inputs[("color_aug", img1_idx, scale)], 
                         inputs[("color_aug", img2_idx, scale)])
@@ -143,7 +180,7 @@ class MonoFlowNet(nn.Module):
             return outputs
 
         elif self.opt.optical_flow in ["pwc", ]:
-            for (img1_idx, img2_idx) in idx_pair_list:
+            for (img1_idx, img2_idx) in self.idx_pair_list:
                 out_1 = self.cal_fwd_pwcnet(features[img1_idx], features[img2_idx])
                 out_2 = self.cal_fwd_pwcnet(features[img2_idx], features[img1_idx])
                 for scale in initial_opt.scales:
@@ -152,18 +189,18 @@ class MonoFlowNet(nn.Module):
             return outputs
 
         elif self.opt.optical_flow in ["arflow", ]:
-            #  images: [0, -1, 1] or [0, -1]
-            # features: [0, -1, 1] or [0, -1]
-            imgs = [inputs[("color_aug", i, 0)] for i in self.opt.frame_ids] 
+            #  images: [-1, 0, 1] or [-1, 0] or [0, 1]
+            # features: [-1, 0, 1] or [-1, 0] or [0, 1]
+            imgs = [inputs[("color_aug", i, 0)] for i in frame_ids] 
             in_feat = []
             for k, v in features.items():
                 in_feat.append(v)
             # features2 = [self.Encoder(img) for img in imgs]
-            outputs = self.FlowDecoder(imgs, in_feat)
+            outputs = self.FlowDecoder(imgs, in_feat, frame_ids)
             return outputs
         
         elif self.opt.optical_flow in ["raft",]:
-            for (img1_idx, img2_idx) in idx_pair_list:
+            for (img1_idx, img2_idx) in self.idx_pair_list:
                 img_pair = [inputs["color_aug", img1_idx, 0], inputs["color_aug", img2_idx, 0]]
                 features_pair = [features[img1_idx][1], features[img2_idx][1]]
                 out_1 = self.FlowDecoder(img_pair, features_pair)

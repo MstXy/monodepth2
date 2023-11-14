@@ -10,6 +10,7 @@ import math
 import os
 import sys
 import pdb
+from copy import deepcopy
 file_dir = os.path.dirname(__file__)
 parent_project = os.path.dirname(file_dir)
 sys.path.append(parent_project)
@@ -19,7 +20,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-
 import torchvision.transforms as transforms
 import torchvision.utils as tvu
 import torchvision.transforms.functional as F
@@ -36,7 +36,6 @@ import monodepth2.utils.utils as mono_utils
 from monodepth2.UPFlow_pytorch.utils.tools import tools as uptools
 import monodepth2.networks as networks
 from monodepth2.layers import *
-
 from monodepth2.networks.MonoFlowNet import MonoFlowNet
 from monodepth2.networks.UnFlowNet import UnFlowNet
 from monodepth2.networks.ARFlow_models.pwclite import PWCLite
@@ -45,11 +44,12 @@ from monodepth2.networks.ARFlow_models.pwclite_withResNet import PWCLiteWithResN
 from monodepth2.networks.ARFlow_models.pwclite_withResNet import PWCLiteFromImg
 from monodepth2.options import MonodepthOptions
 options = MonodepthOptions()
-opt = options.parse()
-if opt.optical_flow in ['raft'] and opt.model_name=='MonoFlowNet':
-    opt.loss_type = 'raft'
+ori_opt = options.parse()
+
+if ori_opt.optical_flow in ['raft'] and ori_opt.model_name=='MonoFlowNet':
+    ori_opt.loss_type = 'raft'
     
-fpath = os.path.join(os.path.dirname(__file__), "splits", opt.split, "{}_files.txt")
+fpath = os.path.join(os.path.dirname(__file__), "splits", ori_opt.split, "{}_files.txt")
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 cmap = plt.get_cmap('viridis')
@@ -58,17 +58,9 @@ from monodepth2.utils import frame_utils
 from monodepth2.utils.utils import InputPadder, forward_interpolate
 
 from monodepth2.ARFlow_losses.flow_loss import unFlowLoss
-
+from monodepth2.ARTransforms.ar_transforms.sp_transfroms import RandomAffineFlow
 torch.set_num_threads(10)
 
-IF_DEBUG = False
-if IF_DEBUG:
-    opt.batch_size = 3
-    opt.num_workers = 0
-    opt.log_frequency = 10
-    # def debughook(etype, value, tb):
-    #     pdb.pm()  # post-mortem debugger
-    # sys.excepthook = debughook
 
 
 class SSIM(nn.Module):
@@ -106,7 +98,7 @@ class SSIM(nn.Module):
 
 
 class MonoFlowLoss():
-    def __init__(self):
+    def __init__(self, opt):
         self.opt = opt
         self.num_scales = len(self.opt.scales)
         self.backproject_depth = {}
@@ -135,8 +127,11 @@ class MonoFlowLoss():
         curr_file_path = os.path.dirname(os.path.realpath(__file__))
         with open(os.path.join(curr_file_path,'ARFlow_losses/kitti_raw.json')) as f:
             self.cfg = EasyDict(json.load(f))
-        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss)
+        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss, opt=self.opt)
 
+    def update_opt(self, new_opt):
+        self.opt = new_opt
+        
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch, by depth info .
         Generated images are saved into the `outputs` dictionary.
@@ -202,9 +197,9 @@ class MonoFlowLoss():
         img2_warped = mono_utils.torch_warp(img1, flow_2_1)
 
         # ===== occ_1_2, occ_2_1:
-        if opt.flow_occ_check:
+        if self.opt.flow_occ_check:
             occ_1_2, occ_2_1 = mono_utils.cal_occ_map(flow_fwd=flow_1_2, flow_bwd=flow_2_1, border_mask=False)
-            if opt.stop_occ_gradient:
+            if self.opt.stop_occ_gradient:
                 occ_1_2, occ_2_1 = occ_1_2.clone().detach(), occ_2_1.clone().detach()
         else:
             # occ_1_2 = mono_utils.create_border_mask(flow_1_2)
@@ -213,17 +208,17 @@ class MonoFlowLoss():
         # ===== photo loss calculation:
         photo_loss_l1 = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='L1',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
+                                                photo_loss_delta=0.4, photo_loss_use_occ=self.opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='L1',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
+                                                photo_loss_delta=0.4, photo_loss_use_occ=self.opt.flow_occ_check)
 
         photo_loss_ssim = self.photo_loss_multi_type(img1, img1_warped, occ_1_2,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check) + \
+                                                photo_loss_delta=0.4, photo_loss_use_occ=self.opt.flow_occ_check) + \
                      self.photo_loss_multi_type(img2, img2_warped, occ_2_1,
                                                 photo_loss_type='SSIM',  # abs_robust, charbonnier, L1, SSIM
-                                                photo_loss_delta=0.4, photo_loss_use_occ=opt.flow_occ_check)
+                                                photo_loss_delta=0.4, photo_loss_use_occ=self.opt.flow_occ_check)
                      
         from monodepth2.ARFlow_losses.loss_blocks import SSIM, smooth_grad_1st, smooth_grad_2nd, TernaryLoss
         
@@ -309,8 +304,12 @@ class MonoFlowLoss():
                             name=idx_pair)
                         outputs[('f_warped', idx_pair[0], idx_pair[1], iter)] = img1_warped  # prev_img warped by curr_img and flow_prev_to_curr
                         outputs[('f_warped', idx_pair[1], idx_pair[0], iter)] = img2_warped   # curr_img warped by prev_img and flow_curr_to_prev
-                        outputs[('occ', idx_pair[0], idx_pair[1], iter)] = occ_1_2
-                        outputs[('occ', idx_pair[1], idx_pair[0], iter)] = occ_2_1
+                        if iter==0:
+                            outputs[('occ', idx_pair[0], idx_pair[1], iter)] = occ_1_2
+                            outputs[('occ', idx_pair[1], idx_pair[0], iter)] = occ_2_1
+                        else:
+                            outputs[('occ', idx_pair[0], idx_pair[1], iter)] = outputs[('occ', idx_pair[0], idx_pair[1], 0)]
+                            outputs[('occ', idx_pair[1], idx_pair[0], iter)] = outputs[('occ', idx_pair[1], idx_pair[0], 0)]
 
                         tmp_smooth_o1_loss += flow_loss["smo_loss_o1"]
                         tmp_smooth_o2_loss += flow_loss["smo_loss_o2"]
@@ -318,11 +317,11 @@ class MonoFlowLoss():
                         tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
                         tmp_ternary_loss += flow_loss["photo_loss_ternary"]
                         
-                        losses["photo_loss_ternary", iter] = tmp_ternary_loss * opt.loss_ternary_w[0] * para
-                        losses["smo_loss_o1", iter] = tmp_smooth_o1_loss * opt.loss_smo1_w[0] * para
-                        losses["smo_loss_o2", iter] = tmp_smooth_o2_loss * opt.loss_smo2_w[0] * para
-                        losses["photo_loss_l1", iter] = tmp_photo_l1_loss * opt.loss_l1_w[0] * para
-                        losses["photo_loss_ssim", iter] = tmp_photo_ssim_loss * opt.loss_ssim_w[0] * para
+                        losses["photo_loss_ternary", iter] = tmp_ternary_loss * self.opt.loss_ternary_w[0] * para
+                        losses["smo_loss_o1", iter] = tmp_smooth_o1_loss * self.opt.loss_smo1_w[0] * para
+                        losses["smo_loss_o2", iter] = tmp_smooth_o2_loss * self.opt.loss_smo2_w[0] * para
+                        losses["photo_loss_l1", iter] = tmp_photo_l1_loss * self.opt.loss_l1_w[0] * para
+                        losses["photo_loss_ssim", iter] = tmp_photo_ssim_loss * self.opt.loss_ssim_w[0] * para
                         losses["flow_loss"] += (losses["smo_loss_o1", iter] + losses["smo_loss_o2", iter] + \
                                                 losses["photo_loss_l1", iter] + losses["photo_loss_ssim", iter] + losses["photo_loss_ternary", iter])
                 
@@ -353,10 +352,10 @@ class MonoFlowLoss():
                         tmp_photo_l1_loss += flow_loss["photo_loss_l1"]
                         tmp_photo_ssim_loss += flow_loss["photo_loss_ssim"]
                     
-                        losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * opt.loss_smo1_w[scale]
-                        losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * opt.loss_smo2_w[scale]
-                        losses["photo_loss_l1", scale] = tmp_photo_l1_loss * opt.loss_l1_w[scale]
-                        losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * opt.loss_ssim_w[scale]
+                        losses["smo_loss_o1", scale] = tmp_smooth_o1_loss * self.opt.loss_smo1_w[scale]
+                        losses["smo_loss_o2", scale] = tmp_smooth_o2_loss * self.opt.loss_smo2_w[scale]
+                        losses["photo_loss_l1", scale] = tmp_photo_l1_loss * self.opt.loss_l1_w[scale]
+                        losses["photo_loss_ssim", scale] = tmp_photo_ssim_loss * self.opt.loss_ssim_w[scale]
                         losses["flow_loss"] += (losses["smo_loss_o1", scale] + losses["smo_loss_o2", scale] + \
                                                 losses["photo_loss_l1", scale] + losses["photo_loss_ssim", scale])
             
@@ -605,33 +604,33 @@ class MonoFlowLoss():
 
 def load_train_objs():
     # ====== 1.train dataset: kitti flow and depth
-    if opt.train_dataset in ['kitti']:
+    if ori_opt.train_dataset in ['kitti']:
         train_filenames = mono_utils.readlines(fpath.format("train"))
         train_dataset = datasets.KITTIRAWDataset(
-            opt.data_path, train_filenames, opt.height, opt.width,
-            opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not opt.depth_branch and opt.optical_flow))
+            ori_opt.data_path, train_filenames, ori_opt.height, ori_opt.width,
+            ori_opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not ori_opt.depth_branch and ori_opt.optical_flow))
     
-    elif opt.train_dataset in ['kitti_odom']:
+    elif ori_opt.train_dataset in ['kitti_odom']:
         train_filenames = mono_utils.readlines(fpath.format("train"))
         train_dataset = datasets.KITTIOdomDataset(
-            opt.data_path, train_filenames, opt.height, opt.width,
-            opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not opt.depth_branch and opt.optical_flow))
+            ori_opt.data_path, train_filenames, ori_opt.height, ori_opt.width,
+            ori_opt.frame_ids, 4, is_train=True, img_ext='.png', color_only=(not ori_opt.depth_branch and ori_opt.optical_flow))
         
-    elif opt.train_dataset in ['kitti_mv15']:
-        opt.frame_ids=[-1, 0]
+    elif ori_opt.train_dataset in ['kitti_mv15']:
+        ori_opt.frame_ids=[-1, 0]
         train_dataset = datasets.KITTI_MV_2015(mv_data_dir=opt.data_path_KITTI_mv15, frame_ids=opt.frame_ids)
     
-    elif opt.train_dataset in ['FlyingChairs']:
-        train_dataset = flow_eval_datasets.FlyingChairs(root=opt.data_path_FlyingChairs, aug_params=None, split='training')
-        # opt.height = 384
-        # opt.width = 512
-        opt.frame_ids=[-1, 0]
+    elif ori_opt.train_dataset in ['FlyingChairs']:
+        train_dataset = flow_eval_datasets.FlyingChairs(root=ori_opt.data_path_FlyingChairs, aug_params=None, split='training')
+        # ori_opt.height = 384
+        # ori_opt.width = 512
+        ori_opt.frame_ids=[-1, 0]
         
-    elif opt.train_dataset in ['difint']:
+    elif ori_opt.train_dataset in ['difint']:
         from monodepth2.datasets.difint_dataset import DiFintDataset
-        train_dataset = DiFintDataset(frame_ids=opt.frame_ids, cam_idxs_list=['E'], num_scales=1)
-        # opt.height=256
-        # opt.width=640
+        train_dataset = DiFintDataset(frame_ids=ori_opt.frame_ids, cam_idxs_list=['E'], num_scales=1)
+        # ori_opt.height=256
+        # ori_opt.width=640
         
     else:
         raise NotImplementedError
@@ -639,11 +638,11 @@ def load_train_objs():
     # ====== 2.train dataset: kitti
     train_dataloader = DataLoader(
         train_dataset,
-        batch_size=opt.batch_size,
-        num_workers=opt.num_workers,
+        batch_size=ori_opt.batch_size,
+        num_workers=ori_opt.num_workers,
         pin_memory=True,
-        shuffle= False if opt.ddp else True,
-        sampler=(torch.utils.data.distributed.DistributedSampler(train_dataset) if opt.ddp else None),
+        shuffle= False if ori_opt.ddp else True,
+        sampler=(torch.utils.data.distributed.DistributedSampler(train_dataset) if ori_opt.ddp else None),
         drop_last=True
     )
     
@@ -656,42 +655,42 @@ def load_train_objs():
 
 
 def load_val_objs():
-    if opt.val_dataset in ['kitti']:
+    if ori_opt.val_dataset in ['kitti']:
         val_filenames = mono_utils.readlines(fpath.format("val"))
         val_dataset = datasets.KITTIRAWDataset(
-            opt.data_path, val_filenames, opt.height, opt.width,
-            opt.frame_ids, 4, is_train=False, img_ext='.png')
+            ori_opt.data_path, val_filenames, ori_opt.height, ori_opt.width,
+            ori_opt.frame_ids, 4, is_train=False, img_ext='.png')
         val_loader = DataLoader(
-            val_dataset, opt.batch_size, shuffle= False if opt.ddp else True,
-            num_workers=opt.num_workers, pin_memory=False, drop_last=True)
+            val_dataset, ori_opt.batch_size, shuffle= False if ori_opt.ddp else True,
+            num_workers=ori_opt.num_workers, pin_memory=False, drop_last=True)
     return val_dataset, val_loader
 
 
 def prepare_dataloader(dataset):
     return DataLoader(
         dataset,
-        batch_size=opt.batch_size,
-        num_workers=opt.num_workers,
+        batch_size=ori_opt.batch_size,
+        num_workers=ori_opt.num_workers,
         pin_memory=True,
         shuffle=True,
-        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if opt.ddp else None),
+        sampler=(torch.utils.data.distributed.DistributedSampler(dataset) if ori_opt.ddp else None),
         drop_last=True
     )
 
 
 class DDP_Trainer():
     def __init__(self, gpu_id, train_dataset, train_loader, val_dataset, val_loader):
-        self.opt = opt
-        self.gpu_id = torch.cuda.current_device() if opt.ddp else gpu_id
+        self.opt = ori_opt
+        self.gpu_id = torch.cuda.current_device() if self.opt.ddp else gpu_id
         
-        self.is_master_node = (str(self.gpu_id) == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if opt.ddp else True
+        self.is_master_node = (str(self.gpu_id) == str(os.environ["CUDA_VISIBLE_DEVICES"][0])) if self.opt.ddp else True
         self.train_loader = train_loader
         ############### val dataset ###############
         
         num_train_samples = len(train_dataset)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
-        if opt.ddp:
-             self.num_total_steps = self.num_total_steps // opt.world_size
+        if self.opt.ddp:
+             self.num_total_steps = self.num_total_steps // self.opt.world_size
         self.val_dataset = val_dataset
         self.val_loader = val_loader
         self.val_iter = iter(self.val_loader)
@@ -735,7 +734,7 @@ class DDP_Trainer():
         curr_file_path = os.path.dirname(os.path.realpath(__file__))
         with open(os.path.join(curr_file_path,'ARFlow_losses/kitti_raw.json')) as f:
             self.cfg = EasyDict(json.load(f))
-        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss)
+        self.arflow_loss = unFlowLoss(cfg=self.cfg.loss, opt=self.opt)
         
         
         class Dict2Class(object):
@@ -745,7 +744,7 @@ class DDP_Trainer():
         
         
         if self.opt.model_name == "MonoFlowNet":
-            self.model = MonoFlowNet(opt)
+            self.model = MonoFlowNet(self.opt)
         elif self.opt.model_name == "UnFlowNet":
             self.model = UnFlowNet().to('cuda:' + str(self.gpu_id))
         elif self.opt.model_name == "ARFlow":
@@ -761,8 +760,8 @@ class DDP_Trainer():
             raise NotImplementedError
         
 
-        if opt.ddp:
-            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True)
+        if self.opt.ddp:
+            self.ddp_model = DDP(self.model.to('cuda'), device_ids=[torch.cuda.current_device()], find_unused_parameters=True, broadcast_buffers=False)
         else:
             self.ddp_model = self.model.to('cuda:' + str(self.gpu_id))
         self.model_optimizer = optim.Adam(self.ddp_model.parameters(), self.opt.learning_rate)
@@ -770,7 +769,7 @@ class DDP_Trainer():
             self.load_ddp_model()
             
         
-        # if opt.freeze_Resnet:
+        # if self.opt.freeze_Resnet:
         #     paras = []
         #     for name, param in self.ddp_model.named_parameters():
         #         if 'ResEncoder' in name:
@@ -795,11 +794,11 @@ class DDP_Trainer():
             gamma = (1e-3) ** (1/(self.opt.num_epochs))
             self.model_lr_scheduler = optim.lr_scheduler.ExponentialLR(self.model_optimizer, gamma=gamma)
 
-        self.mono_loss = MonoFlowLoss()
+        self.mono_loss = MonoFlowLoss(opt=self.opt)
         self.writers = {}
         self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
         if self.is_master_node:
-            for mode in ["train", "val", "weights", "flow", "grad"]:
+            for mode in ["train", "val"]:
                 self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
                 
         self.step = 0
@@ -813,6 +812,10 @@ class DDP_Trainer():
         self.depth_metric_names = [
             "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "da/a1", "da/a2", "da/a3"]
 
+        self.sp_transform = RandomAffineFlow(
+            self.opt, addnoise=self.opt.st_add_noise).to(self.gpu_id)
+        
+        
     def load_ddp_model(self):
         """Load model(s) from disk
         """
@@ -822,21 +825,23 @@ class DDP_Trainer():
 
         chechpoint_path = os.path.join(self.opt.load_weights_folder, "monoFlow.pth")
         print("loading model from folder {}".format(chechpoint_path))
+        pretrained_dict = torch.load(chechpoint_path, map_location='cpu')
+                
         
-        
-        if not opt.ddp:
+        if not self.opt.ddp:
+            # or torch.nn.modules.utils.consume_prefix_in_state_dict_if_present
             new_state_dict = {}
-            for name, params in torch.load(chechpoint_path, map_location='cpu').items():
+            for name, params in pretrained_dict.items():
                 if 'module' in name:
                     name = name[7:]
                 new_state_dict[name] = params
-            self.ddp_model.load_state_dict(new_state_dict)
-        
-        
+            self.ddp_model.load_state_dict(new_state_dict, strict= not self.opt.load_partial)
+            
+
         else:
             # Load the model's state_dict
             self.ddp_model.load_state_dict(
-                torch.load(chechpoint_path, map_location='cpu'))
+                torch.load(chechpoint_path, map_location='cpu'), strict= not self.opt.load_partial)
         
 
         # loading adam state
@@ -861,7 +866,7 @@ class DDP_Trainer():
         """Print a logging statement to the terminal
         """
         loss = losses["loss"].cpu().data
-        samples_per_sec = self.opt.batch_size / duration * opt.world_size
+        samples_per_sec = self.opt.batch_size / duration * self.opt.world_size
         time_sofar = time.time() - self.start_time
         training_time_left = (self.num_total_steps / self.step - 1.0) * time_sofar if self.step > 0 else 0
         curr_lr = self.model_optimizer.param_groups[0]['lr']
@@ -885,23 +890,19 @@ class DDP_Trainer():
         #     torch.abs(outputs['flow', self.idx_pair_list[0][0], self.idx_pair_list[0][1], 0][0])
         #     ), self.step)
 
-        # for scale in opt.scales:
-        for scale in range(opt.raft_iter):
-            writer.add_scalar("smo_loss_o1/scale{}".format(scale), losses["smo_loss_o1", scale], self.step)
-            writer.add_scalar("smo_loss_o2/scale{}".format(scale), losses["smo_loss_o2", scale], self.step)
-            writer.add_scalar("photo_loss_l1/scale{}".format(scale), losses["photo_loss_l1", scale], self.step)
-            writer.add_scalar("photo_loss_ssim/scale{}".format(scale), losses["photo_loss_ssim", scale], self.step)
-            writer.add_scalar("photo_loss_ternary/scale{}".format(scale), losses["photo_loss_ternary", scale], self.step)
+        # for scale in self.opt.scales:
+        iter_num = range(self.opt.raft_iter) if self.opt.optical_flow in ['raft'] else self.opt.scales
+        
+        if self.opt.optical_flow is not None:
+            for scale in iter_num:
+                writer.add_scalar("smo_loss_o1/scale{}".format(scale), losses["smo_loss_o1", scale], self.step)
+                writer.add_scalar("smo_loss_o2/scale{}".format(scale), losses["smo_loss_o2", scale], self.step)
+                writer.add_scalar("photo_loss_l1/scale{}".format(scale), losses["photo_loss_l1", scale], self.step)
+                writer.add_scalar("photo_loss_ssim/scale{}".format(scale), losses["photo_loss_ssim", scale], self.step)
+                writer.add_scalar("photo_loss_ternary/scale{}".format(scale), losses["photo_loss_ternary", scale], self.step)
 
-            # if self.opt.loss_type == 'arloss':
-            #     writer.add_scalar("occ_loss/scale{}".format(scale), losses["occ_loss", scale], self.step)
-                
-
-        # for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
-            
-            if self.opt.optical_flow is not None:
-                if self.opt.optical_flow in ['raft']:
-                    for idx_pair in self.idx_pair_list:
+                for idx_pair in self.idx_pair_list:
+                    if self.opt.optical_flow in ['raft']:
                         # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
                         img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1],j=0, scale=scale, raft=True)
                         # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
@@ -910,10 +911,8 @@ class DDP_Trainer():
                                         format(idx_pair[0], idx_pair[1], scale),img1_img2_flow, self.step)
                         writer.add_image('1.Diff__2.DiffMasked__3.WarpedImg1__4.SourceImg1__5.FlowImg1->Img2__IdxPair{},{}/{}'.
                                         format(idx_pair[0], idx_pair[1], scale), img1_warped_img1_diff, self.step)
-                        
 
-                else:
-                    for idx_pair in self.idx_pair_list:
+                    else:
                         # top to bottom: 1.curr 2.occ_prev_curr 3.flow_prev_curr 4.prev
                         img1_img2_flow = mono_utils.log_vis_1(inputs, outputs, idx_pair[0], idx_pair[1],j=0, scale=scale)
                         # top to bottom:  diff(target, source), diff * mask, warped, source, flow_img1_img2
@@ -934,8 +933,24 @@ class DDP_Trainer():
                                                 outputs[('smoth_Loss_vis', idx_pair[0], idx_pair[1], scale)]
                                             ), 
                                                 self.step)
-                    
-            if self.opt.depth_branch:
+                
+                    if self.opt.atst_start_epoch is not None and self.opt.atst_start_epoch < self.epoch:
+                        writer.add_image('FlowSelfSupAug: FlowAug, FlowPred, OccAug, ImgAug, ImgOri', 
+                                        transforms.functional.pil_to_tensor(mono_utils.stitching_and_show(
+                                                img_list=[
+                                                    outputs[('flow_t', idx_pair[0], idx_pair[1])][0],
+                                                    outputs[('flow_2nd_pass', idx_pair[0], idx_pair[1])][0],
+                                                    outputs[('noc_t', idx_pair[0], idx_pair[1])][0],
+                                                    outputs[('occ', idx_pair[0], idx_pair[1], 0)][0].repeat(3, 1, 1), 
+                                                    outputs[('img_trans', idx_pair[0])][0][0],
+                                                    inputs[('color_aug', idx_pair[0], 0)][0],
+                                                    ],
+                                                ver=True, show=False)),
+                                        self.step
+                                        )
+
+        if self.opt.depth_branch:
+            for j in range(min(4, self.opt.batch_size)):  # write a maximum of four images
                 for s in self.opt.scales:
                     for frame_id in self.opt.frame_ids:
                         # writer.add_image(
@@ -1023,7 +1038,7 @@ class DDP_Trainer():
                     
                     image1_ori = image1_ori[None].to(self.gpu_id)
                     image2_ori = image2_ori[None].to(self.gpu_id)
-                    if opt.norm_trans:
+                    if self.opt.norm_trans:
                         image1_ori = self.norm_trans(image1_ori)
                         image2_ori = self.norm_trans(image2_ori)
                     
@@ -1121,7 +1136,7 @@ class DDP_Trainer():
                     image2_ori = image2_ori[None].to(self.gpu_id)
                     flow_gt = flow_gt.to(self.gpu_id)
                     valid_gt = valid_gt.to(self.gpu_id)
-                    if opt.norm_trans:
+                    if self.opt.norm_trans:
                         image1_ori = self.norm_trans(image1_ori)
                         image2_ori = self.norm_trans(image2_ori)
                     
@@ -1206,7 +1221,6 @@ class DDP_Trainer():
         
         self.ddp_model.train()
         
-        
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth metrics, to allow monitoring during training
         This isn't particularly accurate as it averages over the entire batch,
@@ -1250,13 +1264,13 @@ class DDP_Trainer():
         for k in list(inputs):
             if "color" in k:
                 n, im, _ = k
-                if opt.norm_trans:
+                if self.opt.norm_trans:
                     inputs[k] = self.norm_trans(inputs[k])
                     # mono_utils.stitching_and_show([inputs[k][0]], ver=True, show=True)
                     # breakpoint()
                     # print('after norm std={}, after norm mean={}'.format(torch.std(inputs[k], dim=(0,2,3)), torch.mean(inputs[k], dim=(0,2,3))))
                 
-                if opt.height != inputs[k].shape[2] or opt.width != inputs[k].shape[3]:
+                if self.opt.height != inputs[k].shape[2] or self.opt.width != inputs[k].shape[3]:
                     inputs[k] = self.resize[0](inputs[k])
                     
                 for i in range(1, self.num_scales):
@@ -1307,25 +1321,65 @@ class DDP_Trainer():
     def _run_epoch(self):
         progress_bar = tqdm(self.train_loader, desc=f"Epoch {self.epoch}", disable=not self.is_master_node)
         for batch_idx, inputs in enumerate(progress_bar):
-            # debug
-            # check if self.train_loader.sampler.set_epoch(epoch) working 
-            if batch_idx==0 and self.is_master_node:
-                writer = self.writers['flow']
-                writer.add_image('first img in an epoch', inputs['color', 0, 0][0], self.epoch)
-            
-               
-            # if batch_idx > 1500:
-            #     break
+            self.model_optimizer.zero_grad()
+
             for key, ipt in inputs.items():
                 inputs[key] = ipt.to(self.gpu_id)            
             start_batch_time = time.time()
             outputs = self._run_batch(inputs=inputs)
+            losses = self.mono_loss.compute_losses(inputs, outputs, star_occ=self.opt.flow_occ_check)
             
-            
-            self.model_optimizer.zero_grad()
-            losses = self.mono_loss.compute_losses(inputs, outputs, star_occ=opt.flow_occ_check)
-            
-            
+            # ======== atst loss
+            if self.opt.atst_start_epoch and self.opt.atst_start_epoch < self.epoch:
+                losses['atst_loss'] = 0 
+                
+                for img_idx1, img_idx2 in self.idx_pair_list:
+                    # s = {
+                    #     'imgs': [inputs['color_aug', img_idx1, 0], inputs['color_aug', img_idx2, 0]], 
+                    #     'flows_f': [outputs['flow', img_idx1, img_idx2, 0]], 
+                    #     'masks_f': [outputs['occ', img_idx1, img_idx2, 0]],
+                    #     }
+                    # st_res = self.sp_transform(deepcopy(s)) if self.opt.run_st else deepcopy(s)  # grad stop by deepcopy
+
+                
+                    s = {
+                        'imgs': [inputs['color_aug', img_idx1, 0].detach().clone(), inputs['color_aug', img_idx2, 0].detach().clone()], 
+                        'flows_f': [outputs['flow', img_idx1, img_idx2, 0].detach().clone()], 
+                        'masks_f': [outputs['occ', img_idx1, img_idx2, 0].detach().clone()],
+                        }
+                    st_res = self.sp_transform(deepcopy(s)) if self.opt.run_st else deepcopy(s)  # grad stop by deepcopy
+
+                    flow_t, noc_t = st_res['flows_f'][0], st_res['masks_f'][0]
+                    input_dict_2nd_pass = {('color_aug', img_idx1, 0): st_res['imgs'][0],
+                                        ('color_aug', img_idx2, 0): st_res['imgs'][1]}
+                    
+                    if not self.opt.model_name =='MonoFlowNet':
+                        raise NotImplementedError
+                    else:
+                        out_dict_2nd_pass = self.ddp_model(input_dict_2nd_pass, depth_branch=False, optical_flow=True, frame_ids=[img_idx1, img_idx2])  
+                    # todo: for the case of  model_name!='MonoFlowNet'perform flow prediction only, for one pair of index
+                    
+                    
+                    iter_or_scale_num = self.opt.raft_iter / 2 if self.opt.optical_flow == 'raft' else 1
+                    for iter in range(int(iter_or_scale_num)):
+                        flow_2nd_pass = out_dict_2nd_pass['flow', img_idx1, img_idx2, iter]
+                    
+                        l_atst = ((flow_2nd_pass - flow_t).abs() + 1e-6 ) ** 0.4
+                        l_atst = (l_atst * noc_t).mean() / (noc_t.mean() + 1e-7)
+
+                        losses['loss'] += self.opt.atst_weights * l_atst
+                        
+                        # tb log CHECK:
+                        losses['atst_loss'] += self.opt.atst_weights * l_atst
+                
+                
+                    # only vis last iter and last (img_idx1, img_idx2)
+                    outputs[('flow_t', img_idx1, img_idx2)] = flow_t
+                    outputs[('noc_t', img_idx1, img_idx2)] = noc_t
+                    outputs[('flow_2nd_pass', img_idx1, img_idx2)] = flow_2nd_pass
+                    outputs[('img_trans', img_idx1)] = st_res['imgs'][0]
+
+
             # Nan check
             for n, p in self.ddp_model.named_parameters():
                 if torch.isnan(p).sum() > 0:
@@ -1333,7 +1387,6 @@ class DDP_Trainer():
                     print("Nan in parameters!")
                     import sys
                     sys.exit()
-            
             if(torch.isnan(losses['loss']).sum()>0):
                 for k,v in losses.items():
                     print(k, v)
@@ -1343,15 +1396,14 @@ class DDP_Trainer():
             # torch.nn.utils.clip_grad_value_(self.ddp_model.parameters(), 10.05)
             # print("max of loss", torch.max(losses['loss']))
             
+            
             losses['loss'].backward()
-            
-            
             self.model_optimizer.step()
             
             # ======= warmup
-            if opt.warmup_steps > 0:
-                if self.step < opt.warmup_steps:
-                    self.model_optimizer.param_groups[0]['lr'] = self.opt.learning_rate * (self.step+1) / opt.warmup_steps
+            if self.opt.warmup_steps > 0:
+                if self.step < self.opt.warmup_steps:
+                    self.model_optimizer.param_groups[0]['lr'] = self.opt.learning_rate * (self.step+1) / self.opt.warmup_steps
                     
 
             # ===== log
@@ -1359,29 +1411,24 @@ class DDP_Trainer():
             late_phase = self.step % 2000 == 0 and not self.opt.debug and self.is_master_node
             if early_phase or late_phase:
                 print("logging batch_idx:", batch_idx)
-                if opt.warmup_steps > 0 and self.step < opt.warmup_steps:
+                if self.opt.warmup_steps > 0 and self.step < self.opt.warmup_steps:
                     print('lr adjust to ', self.model_optimizer.param_groups[0]['lr'] )
                 self.log_time(batch_idx, time.time() - start_batch_time, losses)
                 self.log("train", inputs, outputs, losses)
                 
                 
                 
-                # check param and grad and flow distribution
-                # parameters and grad
-                writer = self.writers['weights']
-                writer_grad = self.writers['grad']
-                grad_mean = 0
-                for name, param in self.ddp_model.named_parameters():
-                    if param.requires_grad and param.grad is not None:
-                        writer_grad.add_histogram('batch_' + name + '_grad', param.grad, self.step)  # 记录梯度
-                        grad_mean += torch.mean(torch.abs(param.grad))    
-                    writer.add_histogram('batch_' + name + '_param', param, self.step)  # 记录参数
-                writer.add_scalar('grad_mean', grad_mean, self.step)    
-                
-                # flow histogram
-                writer = self.writers['flow']
-                writer.add_histogram('flow_1_2', outputs['flow', -1, 0, 0], self.step)
-                
+                # # check param and grad and flow distribution
+                # # parameters and grad
+                # writer = self.writers['weights']
+                # writer_grad = self.writers['grad']
+                # grad_mean = 0
+                # for name, param in self.ddp_model.named_parameters():
+                #     if param.requires_grad and param.grad is not None:
+                #         writer_grad.add_histogram('batch_' + name + '_grad', param.grad, self.step)  # 记录梯度
+                #         grad_mean += torch.mean(torch.abs(param.grad))    
+                #     writer.add_histogram('batch_' + name + '_param', param, self.step)  # 记录参数
+                # writer.add_scalar('grad_mean', grad_mean, self.step) 
                 
             self.step += 1
             
@@ -1398,16 +1445,24 @@ class DDP_Trainer():
             if self.epoch >= self.opt.occ_start_epoch:
                 self.opt.flow_occ_check = True
             
-            if self.epoch > int((opt.num_epochs-opt.start_epoch)/4):
+            if self.epoch > int((self.opt.num_epochs-self.opt.start_epoch)/4):
                 self.opt.save_frequeency = 8
             
-            if opt.ddp:
+            if self.opt.ddp:
                 self.train_loader.sampler.set_epoch(epoch)
                         
-            if 'stage1' in self.cfg.train:
-                if self.epoch == self.cfg.train.stage1.epoch and self.is_master_node:
-                    self.arflow_loss.cfg.update(self.cfg.train.stage1.loss)
-                    print('\n ==========update loss function to stage1 loss========== \n')
+            # if 'stage1' in self.cfg.train:
+            #     if self.epoch > self.cfg.train.stage1.epoch and self.is_master_node:
+            #         self.arflow_loss.cfg.update(self.cfg.train.stage1.loss)
+            #         print('\n ==========update loss function to stage1 loss========== \n')
+                    
+            if self.epoch > 10 and self.is_master_node:
+                self.opt.loss_ternary_w = [1, 1, 1, 1]
+                self.opt.loss_l1_w = [0, 0, 0, 0]
+                self.opt.loss_ssim_w = [0, 0, 0, 0]
+                self.arflow_loss.update_opt(self.opt)
+                self.mono_loss.update_opt(self.opt)
+                
                     
                     
             self._run_epoch()
@@ -1438,22 +1493,22 @@ def main(rank: int, world_size: int):
 
 
 if __name__ == "__main__":
-    if opt.ddp:
+    if ori_opt.ddp:
         import os
         os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID" # see issue #152
         os.environ["CUDA_VISIBLE_DEVICES"]="0, 1, 2, 3, 4, 5, 6, 7"
-        os.environ["CUDA_VISIBLE_DEVICES"]=opt.cuda_visible_devices
-        if not opt.world_size == torch.cuda.device_count():
-            print("using torch.cuda.device_count()={}, instead of opt.world_size".format(torch.cuda.device_count(), opt.world_size))
-            opt.world_size = torch.cuda.device_count()
-        mp.spawn(main, args=(opt.world_size,), nprocs=opt.world_size, join=True)
+        os.environ["CUDA_VISIBLE_DEVICES"]=ori_opt.cuda_visible_devices
+        if not ori_opt.world_size == torch.cuda.device_count():
+            print("using torch.cuda.device_count()={}, instead of ori_opt.world_size".format(torch.cuda.device_count(), ori_opt.world_size))
+            ori_opt.world_size = torch.cuda.device_count()
+        mp.spawn(main, args=(ori_opt.world_size,), nprocs=ori_opt.world_size, join=True)
     
     
     else:
-        opt.world_size = 1
+        ori_opt.world_size = 1
         train_dataset, train_loader = load_train_objs()
         val_dataset, val_loader = load_val_objs()
-        trainer = DDP_Trainer(int(opt.device[-1]), train_dataset, train_loader,
+        trainer = DDP_Trainer(int(ori_opt.device[-1]), train_dataset, train_loader,
                               val_dataset, val_loader)
         trainer.train_model()
 

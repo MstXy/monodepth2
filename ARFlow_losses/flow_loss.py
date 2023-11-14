@@ -7,17 +7,16 @@ import monodepth2.utils.utils as mono_utils
 
 from monodepth2.ARFlow_utils.warp_utils import get_occu_mask_bidirection, get_occu_mask_backward
 
-from monodepth2.options import MonodepthOptions
-options = MonodepthOptions()
-opt = options.parse()
-
-
 
 class unFlowLoss(nn.modules.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, opt):
         super(unFlowLoss, self).__init__()
         self.cfg = cfg
+        self.opt = opt
 
+    def update_opt(self, new_opt):
+        self.opt = new_opt
+    
     def loss_photomatric(self, im1_scaled, im1_recons, occu_mask1, scale=0):
         '''
         params:
@@ -33,9 +32,9 @@ class unFlowLoss(nn.modules.Module):
             visulization of l1, ssim, ternary
         '''
         loss = []
-        loss += [(im1_scaled - im1_recons).abs() * occu_mask1 * opt.loss_l1_w[scale]]
-        loss += [SSIM(im1_recons * occu_mask1,  im1_scaled * occu_mask1) * opt.loss_ssim_w[scale]]
-        loss += [TernaryLoss(im1_recons * occu_mask1, im1_scaled * occu_mask1) * opt.loss_ternary_w[scale]]
+        loss += [(im1_scaled - im1_recons).abs() * occu_mask1 * self.opt.loss_l1_w[scale]]
+        loss += [SSIM(im1_recons * occu_mask1,  im1_scaled * occu_mask1) * self.opt.loss_ssim_w[scale]]
+        loss += [TernaryLoss(im1_recons * occu_mask1, im1_scaled * occu_mask1) * self.opt.loss_ternary_w[scale]]
 
         # debug
         # print(torch.sum(loss[2][0]), torch.max(torch.sum(loss[1][0])), torch.min(torch.sum(loss[0][0])))
@@ -81,7 +80,7 @@ class unFlowLoss(nn.modules.Module):
         loss = []
         loss_x, loss_y = func_smooth(flow, im1_scaled, self.cfg.alpha)
         loss += [
-            (loss_x.mean() / 2. + loss_y.mean() / 2.) * opt.loss_smo2_w[scale] 
+            (loss_x.mean() / 2. + loss_y.mean() / 2.) * self.opt.loss_smo2_w[scale] 
             ]
         
         # debug
@@ -245,9 +244,9 @@ class unFlowLoss(nn.modules.Module):
             pyramid_smooth_losses.append(loss_smooth)
 
         # pyramid_warp_losses = [l * w for l, w in
-        #                        zip(pyramid_warp_losses, opt.loss_l1_w[i])]
+        #                        zip(pyramid_warp_losses, self.opt.loss_l1_w[i])]
         # pyramid_smooth_losses = [l * w for l, w in
-        #                          zip(pyramid_smooth_losses,opt.loss_smo2_w[i])]
+        #                          zip(pyramid_smooth_losses,self.opt.loss_smo2_w[i])]
         
         
         # test, add occ_loss
