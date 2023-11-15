@@ -170,10 +170,10 @@ class EfficientDecoder(nn.Module):
         self.swish = MemoryEfficientSwish()
 
         ## [Default]: Channel Attention
-        # self.attn_3 = ChannelAttention(bottleneck)
-        # self.attn_2 = ChannelAttention(bottleneck)
-        # self.attn_1 = ChannelAttention(bottleneck)
-        # self.attn_0 = ChannelAttention(bottleneck//2)
+        self.attn_3 = ChannelAttention(bottleneck)
+        self.attn_2 = ChannelAttention(bottleneck)
+        self.attn_1 = ChannelAttention(bottleneck)
+        self.attn_0 = ChannelAttention(bottleneck//2)
 
         # ## [Opt#1]: Multi Head Attention
         # self.attn_3 = MultiHeadAttention(n_head=1, d_model=bottleneck, d_k=bottleneck, d_v=bottleneck)
@@ -187,11 +187,11 @@ class EfficientDecoder(nn.Module):
         # self.attn_1 = LiteMLA(in_channels=bottleneck, out_channels=bottleneck)
         # self.attn_0 = LiteMLA(in_channels=bottleneck//2, out_channels=bottleneck//2)
 
-        ## [Opt#3]: RVT
-        self.attn_3 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
-        self.attn_2 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
-        self.attn_1 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
-        self.attn_0 = MaxVitAttentionPairCl(dim=bottleneck//2, skip_first_norm=False)
+        # ## [Opt#3]: RVT
+        # self.attn_3 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
+        # self.attn_2 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
+        # self.attn_1 = MaxVitAttentionPairCl(dim=bottleneck, skip_first_norm=False)
+        # self.attn_0 = MaxVitAttentionPairCl(dim=bottleneck//2, skip_first_norm=False)
 
         # disp
         self.disp3 = nn.Sequential(SeparableConvBlock(bottleneck, 1), nn.Sigmoid())

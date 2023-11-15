@@ -49,8 +49,9 @@ class KITTIDataset(MonoDataset):
     def get_color(self, folder, frame_index, side, do_flip):
         # handle first image's prev frame:
         if int(frame_index) < 0:
-        # handle last image's next frame:
             frame_index = 1
+        
+        # handle last image's next frame:
         try:
             color = self.loader(self.get_image_path(folder, frame_index, side))
         except FileNotFoundError:
