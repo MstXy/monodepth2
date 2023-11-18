@@ -193,15 +193,20 @@ class MonoDataset(data.Dataset):
 
         # adjusting intrinsics to match each scale in the pyramid
         for scale in range(self.num_scales):
-            K = self.K.copy()
+            
+            if self.odom:
+                inputs[("K", scale)] = self.Ks[scale]
+                inputs[("inv_K", scale)] = self.inv_Ks[scale]
+            else:
+                K = self.K.copy()
+                K[0, :] *= self.width // (2 ** scale)
+                K[1, :] *= self.height // (2 ** scale)
 
-            K[0, :] *= self.width // (2 ** scale)
-            K[1, :] *= self.height // (2 ** scale)
+                inv_K = np.linalg.pinv(K)
 
-            inv_K = np.linalg.pinv(K)
+                inputs[("K", scale)] = torch.from_numpy(K)
+                inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
-            inputs[("K", scale)] = torch.from_numpy(K)
-            inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
         # if do_color_aug:
         #     color_aug_params = transforms.ColorJitter.get_params(

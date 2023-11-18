@@ -14,6 +14,27 @@ import PIL.Image as pil
 from kitti_utils import generate_depth_map
 from .mono_dataset import MonoDataset
 
+import torch
+
+# util for intrinsic retrieval
+def read_calib_file(filepath):
+    """Read in a calibration file and parse into a dictionary."""
+    data = {}
+
+    with open(filepath, 'r') as f:
+        for line in f.readlines():
+            try:
+                key, value = line.split(':', 1)
+            except ValueError:
+                key, value = line.split(' ', 1)
+            # The only non-float values in these files are dates, which
+            # we don't care about anyway
+            try:
+                data[key] = np.array([float(x) for x in value.split()])
+            except ValueError:
+                pass
+
+    return data
 
 class KITTIDataset(MonoDataset):
     """Superclass for different types of KITTI dataset loaders
@@ -98,6 +119,58 @@ class KITTIOdomDataset(KITTIDataset):
     """
     def __init__(self, *args, **kwargs):
         super(KITTIOdomDataset, self).__init__(*args, **kwargs)
+        
+        # Load the calibration file for image_2
+        line = self.filenames[0].split()
+        folder = line[0]
+        calib_filepath = os.path.join(self.data_path, "sequences/{:02d}".format(int(folder)), 'calib.txt')
+        filedata = read_calib_file(calib_filepath)
+        # Create 3x4 projection matrices
+        P_rect_20 = np.reshape(filedata['P2'], (3, 4))
+        # Compute the camera intrinsics
+        self.K = P_rect_20[0:3, 0:3]
+        self.Ks, self.inv_Ks = [], []
+        # Because of cropping and resizing of the frames, we need to recompute the intrinsics
+        self.process_intrinsics()
+        self.odom = True
+
+    def process_intrinsics(self):
+        # Because of cropping and resizing of the frames, we need to recompute the intrinsics
+        P_cam = self.K
+        orig_size = (self.full_res_shape[1], self.full_res_shape[0])
+
+        for scale in range(self.num_scales):
+            target_image_size = ((self.height  // (2 ** scale)), (self.width  // (2 ** scale)))
+            r_orig = orig_size[0] / orig_size[1]
+            r_target = target_image_size[0] / target_image_size[1]
+
+            if r_orig >= r_target:
+                new_height = r_target * orig_size[1]
+                c_x = P_cam[0, 2] / orig_size[1]
+                c_y = (P_cam[1, 2] - (orig_size[0] - new_height) / 2) / new_height
+                rescale = orig_size[1] / target_image_size[1]
+            else:
+                new_width = orig_size[0] / r_target
+                c_x = (P_cam[0, 2] - (orig_size[1] - new_width) / 2) / new_width
+                c_y = P_cam[1, 2] / orig_size[0]
+                rescale = orig_size[0] / target_image_size[0]
+
+            f_x = P_cam[0, 0] / target_image_size[1] / rescale
+            f_y = P_cam[1, 1] / target_image_size[0] / rescale
+
+            intrinsics_mat = torch.zeros((4, 4))
+            intrinsics_mat[0, 0] = f_x * target_image_size[1]
+            intrinsics_mat[1, 1] = f_y * target_image_size[0]
+            intrinsics_mat[0, 2] = c_x * target_image_size[1]
+            intrinsics_mat[1, 2] = c_y * target_image_size[0]
+            intrinsics_mat[2, 2] = 1
+            intrinsics_mat[3, 3] = 1
+            K = intrinsics_mat
+
+            inv_K = torch.linalg.pinv(K)
+
+            self.Ks.append(K)
+            self.inv_Ks.append(inv_K)
 
     def get_image_path(self, folder, frame_index, side):
         f_str = "{:06d}{}".format(frame_index, self.img_ext)

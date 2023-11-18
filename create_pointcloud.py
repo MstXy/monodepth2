@@ -23,7 +23,7 @@ def main(opt):
 
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    file_name = "pc_09.ply"
+    file_name = "pc_10.ply"
     use_mask = False
     roi = [
             40,
@@ -36,20 +36,20 @@ def main(opt):
     max_d = 20
     min_d = 3
 
-    opt.width = 256
-    opt.height = 512
+    opt.width = 512
+    opt.height = 256
 
     # setup data_loader instances
     ## Odometry dataset
     opt.data_path = "/mnt/km-nfs/ns100002-share/KITTI_raw/odometry/dataset"
-    opt.eval_split = "odom_9" # odom_9 | odom_10
+    opt.eval_split = "odom_10" # odom_9 | odom_10
     sequence_id = int(opt.eval_split.split("_")[1])
     filenames = readlines(
         os.path.join(os.path.dirname(__file__), "splits", "odom",
                      "test_files_{:02d}.txt".format(sequence_id)))
     ds = KITTIOdomDataset(opt.data_path, filenames,
                                            opt.height, opt.width,
-                                           [0, 1], 4, is_train=False, img_ext='.png')
+                                           [0], 4, is_train=False, img_ext='.png')
     data_loader = DataLoader(ds, batch_size=1, shuffle=False, num_workers=8)
 
     # build model architecture
