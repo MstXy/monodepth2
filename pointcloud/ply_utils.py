@@ -6,6 +6,15 @@ import numpy as np
 
 import plyfile
 
+##
+def normalize_image(x):
+    """Rescale image pixels to span range [0, 1]
+    """
+    ma = float(x.max().cpu().data)
+    mi = float(x.min().cpu().data)
+    d = ma - mi if ma != mi else 1e5
+    return (x - mi) / d
+
 ## Pose Utils
 def dump_xyz(source_to_target_transformations):
     xyzs = []
@@ -55,6 +64,9 @@ class PLYSaver(torch.nn.Module):
 
     def add_depthmap(self, depth: torch.Tensor, image: torch.Tensor, intrinsics: torch.Tensor,
                      extrinsics: torch.Tensor):
+        # depth transform
+        self.inv_depth_min_max = (0.33, 0.0025)
+        depth = (1-depth) * self.inv_depth_min_max[1] + depth * self.inv_depth_min_max[0]
         depth = 1 / depth
         image = (image) * 255 #  (image + .5) * 255
         mask = (self.min_d <= depth) & (depth <= self.max_d)

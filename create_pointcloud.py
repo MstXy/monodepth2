@@ -7,7 +7,9 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from pointcloud.ply_utils import PLYSaver
+import matplotlib.pyplot as plt
+
+from pointcloud.ply_utils import PLYSaver, normalize_image
 
 import torch.nn.functional as F
 
@@ -23,8 +25,8 @@ def main(opt):
 
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    file_name = "pc_10.ply"
-    use_mask = False
+    file_name = "pc_00_192_640.ply"
+    use_mask = True
     roi = [
             40,
             256,
@@ -36,13 +38,21 @@ def main(opt):
     max_d = 20
     min_d = 3
 
-    opt.width = 512
-    opt.height = 256
+    opt.width = 640 # 512
+    opt.height = 192 # 256
+
+    # change roi
+    roi = [
+        25,
+        160,
+        40,
+        600, # we are using left view, so shift right a bit
+    ]
 
     # setup data_loader instances
     ## Odometry dataset
     opt.data_path = "/mnt/km-nfs/ns100002-share/KITTI_raw/odometry/dataset"
-    opt.eval_split = "odom_10" # odom_9 | odom_10
+    opt.eval_split = "odom_0" # odom_9 | odom_10 | odom_0
     sequence_id = int(opt.eval_split.split("_")[1])
     filenames = readlines(
         os.path.join(os.path.dirname(__file__), "splits", "odom",
@@ -129,6 +139,11 @@ def main(opt):
 
             pred_disp = result[("disp", 0)]
             
+            # ## visualize pred
+            # plt.imshow(  normalize_image(pred_disp[0].cpu()).permute(1, 2, 0)  )
+            # plt.savefig('foo.png')
+            # raise ValueError
+
             ## motion mask --------------
             if "cv_mask" not in result:
                 cv_mask = pred_disp.new_zeros(pred_disp.shape)
